@@ -60,6 +60,7 @@ status_strip = dbc.Card(
                 _status_item("muselsl", html.Span("Stopped", id="home-muse-status")),
                 _status_item("X", html.Span("N/A", id="home-x-text")),
                 _status_item("Canonical Q", html.Span("N/A", id="home-q-text")),
+                _status_item("HCE", html.Span("N/A", id="home-hce-text")),
                 _status_item("Reliability (rolling last 600)", html.Span("N/A", id="home-reliability-text")),
                 _status_item("Baseline", html.Span("N/A", id="home-baseline-text")),
                 _status_item("Current label", html.Span("(coming soon)", id="home-label-text")),
@@ -208,6 +209,7 @@ layout = dbc.Container(
     Output("home-baseline-text", "children"),
     Output("home-x-text", "children"),
     Output("home-q-text", "children"),
+    Output("home-hce-text", "children"),
     Output("home-label-text", "children"),
     Output("home-now-playing", "children"),
     Output("home-recent-events", "children"),
@@ -248,7 +250,7 @@ def update_home_status(
     event_note,
 ):
     triggered = ctx.triggered_id
-    muse_error = None
+    muse_error = ""
 
     profile = _load_profile()
     profile_address = profile.get("muse_address", "")
@@ -257,6 +259,8 @@ def update_home_status(
     muse = registry.muse_stream_manager
     spotify_logger = registry.spotify_logger
     session_id = engine.get_session_id()
+    engine_status = engine.get_status()
+    latest_for_events = engine_status.get("latest_snapshot") if isinstance(engine_status.get("latest_snapshot"), dict) else {}
 
     ndjson_state = bool(ndjson_enabled)
 
@@ -288,7 +292,7 @@ def update_home_status(
         spotify_logger.stop()
     elif triggered == "home-bookmark-btn":
         ts_now = time.time()
-        latest = engine_status.get("latest_snapshot") or {}
+        latest = latest_for_events or {}
         bucket = None
         try:
             buckets = storage.get_buckets_between(ts_now - 600, ts_now + 1, session_id=session_id) if session_id else []
@@ -366,24 +370,29 @@ def update_home_status(
     else:
         reliability_text = "Reliability (rolling last 600): N/A"
 
-    meta = (latest.get("meta") or {}) if isinstance(latest, dict) else {}
+    latest_snapshot = engine_status.get("latest_snapshot") if isinstance(engine_status.get("latest_snapshot"), dict) else {}
+    meta = latest_snapshot.get("meta") or {}
     baseline_loaded = meta.get("baseline_loaded")
     baseline_path_used = meta.get("baseline_path_used")
-    baseline_warning = meta.get("baseline_warning")
+    baseline_warning = meta.get("baseline_warning") or engine_status.get("baseline_warning")
     if baseline_loaded and baseline_path_used:
         baseline_text = f"Baseline: LOADED — {baseline_path_used}"
     else:
         warn = baseline_warning or "Using fallback baseline"
         baseline_text = f"Baseline: FALLBACK — {warn}"
 
-    latest = engine_status.get("latest_snapshot") or {}
-    x_val = latest.get("X")
-    q_vf = latest.get("Q_vibe_focus")
+    x_val = latest_snapshot.get("X")
+    q_vf = latest_snapshot.get("Q_vibe_focus")
+    hce_val = latest_snapshot.get("HCE")
     x_text = f"X: {x_val:.3f}" if x_val is not None else "X: N/A"
     q_text = f"Q (canonical): {q_vf:.3f}" if q_vf is not None else "Q (canonical): N/A"
+    hce_text = f"HCE: {hce_val:.3f}" if hce_val is not None else "HCE: N/A"
     label_text = "Current label: (coming soon)"
-    sp_status = spotify_logger.status()
-    latest_play = sp_status.get("latest") or {}
+    try:
+        sp_status = spotify_logger.status()
+    except Exception:
+        sp_status = {}
+    latest_play = (sp_status.get("latest") or {}) if isinstance(sp_status, dict) else {}
 
     now_playing = "N/A"
     if latest_play:
@@ -399,7 +408,7 @@ def update_home_status(
             now_playing = f"{latest_play.get('artists') or ''} — {latest_play.get('track_name') or ''} ({_fmt(prog)} / {_fmt(dur)})"
         else:
             now_playing = "Paused"
-    if sp_status.get("last_error"):
+    if isinstance(sp_status, dict) and sp_status.get("last_error"):
         now_playing = f"Not connected: {sp_status.get('last_error')}"
 
     # Recent events
@@ -424,7 +433,7 @@ def update_home_status(
     stop_muse_disabled = not muse_running
 
     ndjson_label = f"Toggle NDJSON Emit ({'On' if ndjson_state else 'Off'})"
-    address_value = muse_address or profile_address
+    address_value = (muse_address or profile_address or "").strip()
 
     return (
         lsl_dot_class,
@@ -433,8 +442,10 @@ def update_home_status(
         muse_text,
         error_text,
         reliability_text,
+        baseline_text,
         x_text,
         q_text,
+        hce_text,
         label_text,
         now_playing,
         recent_events_html,
@@ -445,6 +456,5 @@ def update_home_status(
         ndjson_label,
         ndjson_state,
         address_value,
-        baseline_text,
     )
 

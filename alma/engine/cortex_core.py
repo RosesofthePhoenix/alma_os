@@ -23,6 +23,7 @@ from scipy.signal import welch
 from scipy.spatial.distance import jensenshannon
 
 from alma import config
+from alma.engine import xq_metrics_v4_2_1 as xq_metrics
 
 # Core constants (mirroring external script defaults)
 FS_TARGET = 256
@@ -31,6 +32,8 @@ STEP_SEC = 1
 WINDOW_N = FS_TARGET * WINDOW_SEC
 STEP_N = FS_TARGET * STEP_SEC
 EPS = 1e-12
+EMA_ALPHA_X = 0.18
+HCE_DENOM_FLOOR = 1e-6
 
 # Baseline fallbacks (used if no external baseline is loaded)
 F_BASE = np.linspace(1, 45, 45, dtype=float)
@@ -39,11 +42,15 @@ P_REF /= P_REF.sum()
 MU_JS = 0.15
 P90_JS = 0.35
 TAU_PHI = (P90_JS - MU_JS) / np.log(2.0) if (P90_JS > MU_JS) else 0.10
+GAMMA_REF = 0.25
+BG_REF = 0.25
 BASELINE_VERSION = "embedded_fallback"
 BASELINE_WARNING: Optional[str] = None
 BASELINE_LOADED: bool = False
 BASELINE_PATH_USED: Optional[str] = None
 CODE_VERSION = "cortex_core"
+METRICS_VERSION = "v4_2_1"
+_BASELINE_LOGGED = False
 
 
 def _sigmoid(z: float) -> float:
@@ -160,60 +167,47 @@ class CortexState:
     last_compute_samples: int
     history: Dict[str, List[float]]
     stream_meta: Dict[str, object]
+    ema: Dict[str, Optional[float]]
 
 
 def load_baseline(baseline_path: Optional[str] = None) -> None:
     """Load baseline with robust path resolution; record status."""
-    global F_BASE, P_REF, MU_JS, P90_JS, TAU_PHI, BASELINE_VERSION, BASELINE_WARNING, BASELINE_LOADED, BASELINE_PATH_USED
-    tried = []
-    path_candidates: List[Path] = []
-    if baseline_path:
-        p = Path(baseline_path).expanduser()
-        path_candidates.append(p if p.is_absolute() else config.ROOT_DIR / p)
-        path_candidates.append(Path.cwd() / p)
-    # default baseline
-    default_path = Path(config.BASELINE_DEFAULT_PATH).expanduser()
-    path_candidates.append(default_path if default_path.is_absolute() else config.ROOT_DIR / default_path)
-
-    for p in path_candidates:
-        tried.append(str(p))
-        try:
-            if p and p.exists():
-                with p.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
-                f_base = np.array(data.get("f_bins_hz") or [], dtype=float)
-                p_ref = np.array(data.get("P_ref") or [], dtype=float)
-                if f_base.size == 0 or p_ref.size == 0:
-                    continue
-                f_base = np.maximum(f_base, 0.0)
-                p_ref = np.maximum(p_ref, 0.0)
-                p_ref = p_ref / (np.sum(p_ref) + EPS)
-                mu_js = float(data.get("mu_JS_dist", MU_JS))
-                p90_js = float(data.get("p90_JS_dist", P90_JS))
-                tau_phi = (p90_js - mu_js) / np.log(2.0) if (p90_js > mu_js) else 0.10
-
-                F_BASE = f_base
-                P_REF = p_ref
-                MU_JS = mu_js
-                P90_JS = p90_js
-                TAU_PHI = tau_phi
-                BASELINE_VERSION = str(data.get("version", "unknown"))
-                BASELINE_WARNING = None
-                BASELINE_LOADED = True
-                BASELINE_PATH_USED = str(p)
-                return
-        except Exception:
-            continue
-
-    # fallback
-    BASELINE_WARNING = f"Using fallback baseline; tried: {tried}"
-    BASELINE_LOADED = False
-    BASELINE_PATH_USED = None
+    global F_BASE, P_REF, MU_JS, P90_JS, TAU_PHI, BASELINE_VERSION, BASELINE_WARNING, BASELINE_LOADED, BASELINE_PATH_USED, GAMMA_REF, BG_REF
+    try:
+        xq_metrics.load_baseline(baseline_path)
+        status = xq_metrics.baseline_status()
+        F_BASE = np.array(xq_metrics.F_BASE, dtype=float)
+        P_REF = np.array(xq_metrics.P_REF, dtype=float)
+        MU_JS = float(xq_metrics.MU_JS)
+        P90_JS = float(xq_metrics.P90_JS)
+        TAU_PHI = float(xq_metrics.TAU_PHI)
+        GAMMA_REF = float(status.get("gamma_ref", GAMMA_REF))
+        BG_REF = float(status.get("bg_ref", BG_REF))
+        BASELINE_VERSION = str(status.get("baseline_version", BASELINE_VERSION))
+        BASELINE_WARNING = status.get("baseline_warning")
+        BASELINE_LOADED = bool(status.get("baseline_loaded"))
+        BASELINE_PATH_USED = status.get("baseline_path_used")
+    except Exception:
+        BASELINE_WARNING = "Using fallback baseline (xq load exception)"
+        BASELINE_LOADED = False
+        BASELINE_PATH_USED = None
 
 
 def init_cortex_state(fs: float = FS_TARGET, baseline_path: Optional[str] = None) -> Dict[str, object]:
     """Initialize cortex state (buffers, history, config)."""
     load_baseline(baseline_path)
+    global _BASELINE_LOGGED
+    if not _BASELINE_LOGGED:
+        status = {
+            "baseline_loaded": BASELINE_LOADED,
+            "baseline_version": BASELINE_VERSION,
+            "baseline_path": BASELINE_PATH_USED,
+            "gamma_ref": GAMMA_REF,
+            "bg_ref": BG_REF,
+            "metrics_version": METRICS_VERSION,
+        }
+        print(f"[cortex_core] baseline status: {status}")
+        _BASELINE_LOGGED = True
     state = CortexState(
         buffers=[deque(maxlen=int(fs * 600)) for _ in range(4)],
         ts=deque(maxlen=int(fs * 600)),
@@ -223,11 +217,16 @@ def init_cortex_state(fs: float = FS_TARGET, baseline_path: Optional[str] = None
         last_compute_samples=0,
         history={
             "t": [],
+            "X_raw": [],
+            "X_ema": [],
+            "HCE": [],
+            "HCE_raw": [],
             "Q_abs_raw": [],
             "Q_vibe_raw": [],
             "Q_vibe_focus_raw": [],
         },
         stream_meta={},
+        ema={"X": None},
     )
     return {"state": state}
 
@@ -281,7 +280,12 @@ def compute_step_if_ready(cortex_state: Dict[str, object], now_s: Optional[float
     window_ts = list(state.ts)[-window_n:]
     window = np.vstack([np.array(b)[-window_n:] for b in state.buffers])
 
-    metrics = _compute_metrics(window, fs=fs)
+    metrics_version = METRICS_VERSION
+    try:
+        metrics = xq_metrics.compute_metrics_from_window(window, fs=fs)
+    except Exception:
+        metrics = _compute_metrics(window, fs=fs)
+        metrics_version = CODE_VERSION
     state.last_compute_samples = state.n_total_samples
 
     ts_unix = now_s
@@ -289,42 +293,108 @@ def compute_step_if_ready(cortex_state: Dict[str, object], now_s: Optional[float
 
     # Append history (seconds-based)
     state.history["t"].append(t_session)
-    state.history["Q_abs_raw"].append(metrics["Q_abs_raw"])
-    state.history["Q_vibe_raw"].append(metrics["Q_vibe_raw"])
-    state.history["Q_vibe_focus_raw"].append(metrics["Q_vibe_focus_raw"])
+
+    X_raw = float(metrics.get("X", metrics.get("R_abs", 0.0)))
+    prev_ema = state.ema.get("X")
+    X_ema = prev_ema
+    if np.isfinite(X_raw):
+        if prev_ema is None or not np.isfinite(prev_ema):
+            X_ema = X_raw
+        else:
+            X_ema = float(EMA_ALPHA_X * X_raw + (1.0 - EMA_ALPHA_X) * prev_ema)
+    state.ema["X"] = X_ema
+    X_val = X_ema if (X_ema is not None and np.isfinite(X_ema)) else X_raw
+
+    state.history["X_raw"].append(X_raw)
+    state.history["X_ema"].append(X_ema)
+    state.history["Q_abs_raw"].append(metrics.get("Q_abs_raw"))
+    state.history["Q_vibe_raw"].append(metrics.get("Q_vibe_raw"))
+    state.history["Q_vibe_focus_raw"].append(metrics.get("Q_vibe_focus_raw"))
+    q_abs = float(metrics.get("Q_abs", 0.0))
+    q_vibe = float(metrics.get("Q_vibe", 0.0))
+    q_vf = float(metrics.get("Q_vibe_focus", 0.0))
+    q_abs_raw = float(metrics.get("Q_abs_raw", 0.0))
+    q_vibe_raw = float(metrics.get("Q_vibe_raw", 0.0))
+    q_vf_raw = float(metrics.get("Q_vibe_focus_raw", 0.0))
+    validity = bool(metrics.get("valid", False))
+    quality_conf = float(metrics.get("quality_conf", 0.0))
+    reason_codes = metrics.get("reason_codes", "")
+    band_conf = float(metrics.get("band_conf", 0.0))
+    ch_conf_raw_val = metrics.get("ch_conf_raw")
+    if ch_conf_raw_val is None:
+        ch_conf_raw_val = float("nan")
+    ch_conf_used_val = metrics.get("ch_conf_used", ch_conf_raw_val)
+    if ch_conf_used_val is None:
+        ch_conf_used_val = ch_conf_raw_val
+    blink_conf_val = metrics.get("blink_conf")
+    blink_conf = float(1.0 if blink_conf_val is None else blink_conf_val)
+    contact_conf_val = metrics.get("contact_conf")
+    contact_conf = float(1.0 if contact_conf_val is None else contact_conf_val)
+    drift_conf_val = metrics.get("drift_conf")
+    drift_conf = float(1.0 if drift_conf_val is None else drift_conf_val)
+
+    # HCE metric (masked) and diagnostic raw
+    X_for_hce = X_ema if (X_ema is not None and np.isfinite(X_ema)) else X_raw
+    q = max(0.0, q_vf)
+    x_hce = float(X_for_hce)
+    denom = max(x_hce, HCE_DENOM_FLOOR)
+    hce = (q / denom) * float(np.log1p(q))
+    if not validity:
+        hce = 0.0
+    if not np.isfinite(hce):
+        hce = 0.0
+
+    q_r = max(0.0, q_vf_raw)
+    x_r = max(float(X_raw), HCE_DENOM_FLOOR)
+    hce_raw = (q_r / x_r) * float(np.log1p(q_r))
+    if not np.isfinite(hce_raw):
+        hce_raw = 0.0
+
+    state.history["HCE"].append(hce)
+    state.history["HCE_raw"].append(hce_raw)
 
     snapshot = {
         "ts_unix": ts_unix,
         "t_session": t_session,
-        "X": float(metrics["R_abs"]),
-        "Q_vibe_focus": float(metrics["Q_vibe_focus"]),
-        "Q_vibe": float(metrics["Q_vibe"]),
-        "Q_abs": float(metrics["Q_abs"]),
-        "Q_vibe_focus_raw": float(metrics["Q_vibe_focus_raw"]),
-        "Q_vibe_raw": float(metrics["Q_vibe_raw"]),
-        "Q_abs_raw": float(metrics["Q_abs_raw"]),
+        "X": X_val,
+        "X_raw": X_raw,
+        "X_ema": X_ema,
+        "HCE": hce,
+        "HCE_raw": hce_raw,
+        "Q_vibe_focus": q_vf,
+        "Q_vibe": q_vibe,
+        "Q_abs": q_abs,
+        "Q_vibe_focus_raw": q_vf_raw,
+        "Q_vibe_raw": q_vibe_raw,
+        "Q_abs_raw": q_abs_raw,
         "reliability": {
-            "valid": bool(metrics["valid"]),
-            "quality_conf": float(metrics["quality_conf"]),
-            "reason_codes": metrics["reason_codes"],
-            "qualia_valid": bool(metrics["qualia_valid"]),
-            "ch_conf_raw": float(metrics["ch_conf_raw"]),
-            "band_conf": float(metrics["band_conf"]),
-            "ch_conf_used": float(metrics["ch_conf_raw"]),
+            "valid": validity,
+            "quality_conf": quality_conf,
+            "reason_codes": reason_codes,
+            "qualia_valid": bool(metrics.get("qualia_valid", validity)),
+            "ch_conf_raw": float(ch_conf_raw_val),
+            "band_conf": band_conf,
+            "ch_conf_used": float(ch_conf_used_val),
+            "blink_conf": blink_conf,
+            "contact_conf": contact_conf,
+            "drift_conf": drift_conf,
         },
         "raw": {
-            "JS_dist": float(metrics["JS_dist"]),
-            "phi": float(metrics["phi"]),
-            "theta": float(metrics["theta"]),
-            "alpha": float(metrics["alpha"]),
-            "beta": float(metrics["beta"]),
-            "gamma": float(metrics["gamma"]),
-            "theta_n": float(metrics["theta_n"]),
-            "alpha_n": float(metrics["alpha_n"]),
-            "beta_n": float(metrics["beta_n"]),
-            "gamma_n": float(metrics["gamma_n"]),
-            "w_emg": float(metrics["w_emg"]),
-            "ch_corr": float(metrics["ch_corr"]),
+            "JS_dist": float(metrics.get("JS_dist", 0.0)),
+            "phi": float(metrics.get("phi", 0.0)),
+            "theta": float(metrics.get("theta", 0.0)),
+            "alpha": float(metrics.get("alpha", 0.0)),
+            "beta": float(metrics.get("beta", 0.0)),
+            "gamma": float(metrics.get("gamma", 0.0)),
+            "theta_n": float(metrics.get("theta_n", 0.0)),
+            "alpha_n": float(metrics.get("alpha_n", 0.0)),
+            "beta_n": float(metrics.get("beta_n", 0.0)),
+            "gamma_n": float(metrics.get("gamma_n", 0.0)),
+            "w_emg": float(metrics.get("w_emg", 0.0)),
+            "ch_corr": float(metrics.get("ch_corr", 0.0)),
+            "X_raw": X_raw,
+            "X_ema": X_ema if (X_ema is not None and np.isfinite(X_ema)) else X_raw,
+            "HCE_raw": hce_raw,
         },
         "meta": {
             "fs": fs,
@@ -335,6 +405,9 @@ def compute_step_if_ready(cortex_state: Dict[str, object], now_s: Optional[float
             "baseline_loaded": BASELINE_LOADED,
             "baseline_path_used": BASELINE_PATH_USED,
             "code_version": CODE_VERSION,
+            "metrics_version": metrics_version,
+            "gamma_ref": GAMMA_REF,
+            "bg_ref": BG_REF,
         },
     }
     return snapshot
@@ -360,6 +433,7 @@ def build_state_packet(
         "Q_vibe": snapshot.get("Q_vibe"),
         "Q_vibe_focus": snapshot.get("Q_vibe_focus"),
         "Q_vibe_focus_E": snapshot.get("Q_vibe_focus_E", snapshot.get("Q_vibe_focus")),
+        "HCE": snapshot.get("HCE"),
         "reliability": snapshot.get("reliability", {}),
         "raw": snapshot.get("raw", {}),
         "meta": snapshot.get("meta", {}),
@@ -372,14 +446,30 @@ def build_state_packet(
             "Q_vibe_raw": snapshot.get("Q_vibe_raw"),
             "Q_vibe_focus_raw": snapshot.get("Q_vibe_focus_raw"),
             "Q_vibe_focus_E_raw": snapshot.get("Q_vibe_focus_E_raw", snapshot.get("Q_vibe_focus_raw")),
+            "X_raw": snapshot.get("X_raw"),
+            "X_ema": snapshot.get("X_ema"),
+            "HCE_raw": snapshot.get("HCE_raw", (snapshot.get("raw") or {}).get("HCE_raw")),
         }
     )
     return packet
 
 
+def baseline_status() -> Dict[str, object]:
+    """Return current baseline load status for diagnostics."""
+    return {
+        "baseline_loaded": BASELINE_LOADED,
+        "baseline_path_used": BASELINE_PATH_USED,
+        "baseline_warning": BASELINE_WARNING,
+        "baseline_version": BASELINE_VERSION,
+        "gamma_ref": GAMMA_REF,
+        "bg_ref": BG_REF,
+    }
+
+
 __all__ = [
     "init_cortex_state",
     "load_baseline",
+    "baseline_status",
     "process_lsl_samples",
     "compute_step_if_ready",
     "build_state_packet",

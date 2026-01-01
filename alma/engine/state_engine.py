@@ -13,6 +13,7 @@ import numpy as np
 from pylsl import StreamInlet
 
 from alma import config
+from alma.engine import cortex_core
 from alma.engine import lsl_client
 from alma.engine.cortex_core import (
     build_state_packet,
@@ -51,20 +52,23 @@ class StateEngine:
             "t": deque(maxlen=history_len),
             "ts_unix": deque(maxlen=history_len),
             "X": deque(maxlen=history_len),
+            "HCE": deque(maxlen=history_len),
             "Q_abs": deque(maxlen=history_len),
             "Q_vibe": deque(maxlen=history_len),
             "Q_vibe_focus": deque(maxlen=history_len),
             "Q_abs_raw": deque(maxlen=history_len),
             "Q_vibe_raw": deque(maxlen=history_len),
             "Q_vibe_focus_raw": deque(maxlen=history_len),
+            "HCE_raw": deque(maxlen=history_len),
             "valid": deque(maxlen=history_len),
             "quality_conf": deque(maxlen=history_len),
             "reason_codes": deque(maxlen=history_len),
         }
         self._reliability_pct: Optional[float] = None
+        self._baseline_status: Dict[str, object] = {}
         profile = self._load_profile()
         baseline_path = profile.get("baseline_path", str(config.BASELINE_DEFAULT_PATH))
-        self._cortex_state = init_cortex_state(baseline_path=baseline_path)
+        self._init_cortex_with_baseline(baseline_path)
         self._ch_labels: List[str] = []
         self._session_id: Optional[str] = None
         self._profile_path = str(Path(__file__).resolve().parents[2] / "profiles" / "default.json")
@@ -81,7 +85,7 @@ class StateEngine:
         with self._lock:
             profile = self._load_profile()
             baseline_path = profile.get("baseline_path", str(config.BASELINE_DEFAULT_PATH))
-            self._cortex_state = init_cortex_state(baseline_path=baseline_path)
+            self._init_cortex_with_baseline(baseline_path)
         self._ensure_session_started()
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -128,6 +132,10 @@ class StateEngine:
                 "latest_snapshot": dict(self._latest) if self._latest else None,
                 "history_len": len(self._history_ring["valid"]),
                 "emit_ndjson": self._emit_ndjson,
+                "baseline_loaded": self._baseline_status.get("baseline_loaded") if self._baseline_status else None,
+                "baseline_path_used": self._baseline_status.get("baseline_path_used") if self._baseline_status else None,
+                "baseline_warning": self._baseline_status.get("baseline_warning") if self._baseline_status else None,
+                "baseline_version": self._baseline_status.get("baseline_version") if self._baseline_status else None,
             }
 
     def get_history(self) -> Dict[str, List[object]]:
@@ -173,6 +181,7 @@ class StateEngine:
                 if snapshot:
                     with self._lock:
                         self._latest = snapshot
+                        self._baseline_status = self._capture_baseline_status(snapshot.get("meta"))
                         self._append_history(snapshot)
                         self._reliability_pct = self._compute_reliability_pct()
                     if self._emit_ndjson:
@@ -247,12 +256,15 @@ class StateEngine:
         self._history_ring["t"].append(snapshot.get("t_session"))
         self._history_ring["ts_unix"].append(snapshot.get("ts_unix"))
         self._history_ring["X"].append(snapshot.get("X"))
+        self._history_ring["HCE"].append(snapshot.get("HCE"))
         self._history_ring["Q_abs"].append(snapshot.get("Q_abs"))
         self._history_ring["Q_vibe"].append(snapshot.get("Q_vibe"))
         self._history_ring["Q_vibe_focus"].append(snapshot.get("Q_vibe_focus"))
         self._history_ring["Q_abs_raw"].append(snapshot.get("Q_abs_raw"))
         self._history_ring["Q_vibe_raw"].append(snapshot.get("Q_vibe_raw"))
         self._history_ring["Q_vibe_focus_raw"].append(snapshot.get("Q_vibe_focus_raw"))
+        raw = snapshot.get("raw") or {}
+        self._history_ring["HCE_raw"].append(raw.get("HCE_raw") if raw else snapshot.get("HCE_raw"))
         reliability = snapshot.get("reliability") or {}
         self._history_ring["valid"].append(reliability.get("valid"))
         self._history_ring["quality_conf"].append(reliability.get("quality_conf"))
@@ -483,6 +495,24 @@ class StateEngine:
                 return json.load(f)
         except Exception:
             return {}
+
+    def _init_cortex_with_baseline(self, baseline_path: Optional[str]) -> None:
+        """(Re)initialize cortex with the requested baseline path."""
+        self._cortex_state = init_cortex_state(baseline_path=baseline_path)
+        self._baseline_status = self._capture_baseline_status()
+        self._latest = {"meta": dict(self._baseline_status)} if self._baseline_status else None
+
+    @staticmethod
+    def _capture_baseline_status(meta: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+        """Capture baseline status from snapshot meta or current cortex_core globals."""
+        if meta:
+            return {
+                "baseline_loaded": meta.get("baseline_loaded"),
+                "baseline_path_used": meta.get("baseline_path_used"),
+                "baseline_warning": meta.get("baseline_warning"),
+                "baseline_version": meta.get("baseline_version"),
+            }
+        return dict(cortex_core.baseline_status())
 
 
 __all__ = ["StateEngine"]

@@ -110,6 +110,7 @@ def handle_turrell(_n, start_clicks, stop_clicks, enable_ndjson_clicks, display,
     ndjson_on = bool(engine_status.get("emit_ndjson"))
 
     warning_text = ""
+    ndjson_off_msg = "NDJSON emit is OFF — Turrell will appear static. Enable NDJSON emit first."
     if triggered == "env-enable-ndjson":
         try:
             engine.set_emit_ndjson(True)
@@ -119,7 +120,7 @@ def handle_turrell(_n, start_clicks, stop_clicks, enable_ndjson_clicks, display,
             warning_text = f"Failed to enable NDJSON emit: {exc}"
     if triggered == "env-start-turrell":
         if not ndjson_on:
-            warning_text = "NDJSON emit is OFF. Enable it before launching Turrell."
+            warning_text = ndjson_off_msg
         else:
             profile = _load_profile()
             ndjson_path = profile.get("ndjson_state_path", str(config.STATE_STREAM_PATH))
@@ -135,7 +136,7 @@ def handle_turrell(_n, start_clicks, stop_clicks, enable_ndjson_clicks, display,
     if st.get("last_error"):
         status_parts.append(f"Error: {st['last_error']}")
     if not warning_text and not ndjson_on:
-        warning_text = "NDJSON emit is OFF. Turrell needs live NDJSON; click 'Enable NDJSON Emit' first."
+        warning_text = ndjson_off_msg
     return html.Div(" | ".join(status_parts)), warning_text
 
 

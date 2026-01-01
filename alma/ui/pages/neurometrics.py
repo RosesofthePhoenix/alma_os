@@ -80,6 +80,23 @@ def _make_x_fig(t: List[float], sliced: dict) -> go.Figure:
     return fig
 
 
+def _make_hce_fig(t: List[float], sliced: dict) -> go.Figure:
+    y = sliced.get("HCE", [])
+    if not t or not y:
+        return _blank_fig("HCE")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=t, y=y, mode="lines", name="HCE", line=dict(color="#6be28c")))
+    fig.update_layout(
+        template="plotly_dark",
+        title="HCE (last 420s)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=10, r=10, t=30, b=10),
+        height=260,
+    )
+    return fig
+
+
 def _make_q_fig(t: List[float], sliced: dict, lens: str) -> go.Figure:
     fig = go.Figure()
     traces = [
@@ -187,6 +204,7 @@ layout = dbc.Container(
                 [
                     dcc.Graph(id="neuro-qraw-graph", config={"displayModeBar": False}),
                     dcc.Graph(id="neuro-x-graph", config={"displayModeBar": False}),
+                    dcc.Graph(id="neuro-hce-graph", config={"displayModeBar": False}),
                     dcc.Graph(id="neuro-q-graph", config={"displayModeBar": False}),
                     dcc.Graph(id="neuro-valid-graph", config={"displayModeBar": False}),
                     dcc.Interval(id="neuro-interval", interval=1000, n_intervals=0),
@@ -203,6 +221,7 @@ layout = dbc.Container(
 @callback(
     Output("neuro-qraw-graph", "figure"),
     Output("neuro-x-graph", "figure"),
+    Output("neuro-hce-graph", "figure"),
     Output("neuro-q-graph", "figure"),
     Output("neuro-valid-graph", "figure"),
     Output("neuro-option-e-note", "children"),
@@ -216,10 +235,11 @@ def update_neurometrics(_n, lens):
 
     fig_qraw = _make_qraw_fig(t, sliced)
     fig_x = _make_x_fig(t, sliced)
+    fig_hce = _make_hce_fig(t, sliced)
     fig_q = _make_q_fig(t, sliced, lens=lens or "vibe_focus")
     fig_valid = _make_valid_fig(t, sliced)
 
     note = ""
     if (lens == "vibe_focus_E") and not sliced.get("Q_vibe_focus_E"):
         note = "Option E requires baseline; data unavailable."
-    return fig_qraw, fig_x, fig_q, fig_valid, note
+    return fig_qraw, fig_x, fig_hce, fig_q, fig_valid, note

@@ -27,7 +27,7 @@ MIN_VALID_FRACTION_FOR_LABEL: float = 0.6
 
 def ensure_required_paths() -> None:
     """Create required runtime directories if they do not exist."""
-    for path in {SESSIONS_CURRENT_DIR, DATA_DIR}:
+    for path in {SESSIONS_CURRENT_DIR, DATA_DIR, BASELINES_DIR}:
         path.mkdir(parents=True, exist_ok=True)
 
 

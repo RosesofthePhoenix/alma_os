@@ -1,0 +1,12 @@
+# Changelog
+
+## v0.1 — Baseline robustness, v4.2.1 metrics, HCE, Turrell args, UI safety
+- Baseline: deterministic loading (absolute/ROOT/cwd), gamma_ref/bg_ref captured; Start Engine reloads baseline; status exposed to snapshots.
+- Metrics: integrated v4.2.1 compute; X now uses EMA; meta includes metrics_version; raw/masked Qs preserved.
+- New metric: HCE = (Q_vibe_focus / X_ema) * log1p(Q_vibe_focus), with HCE_raw; exported in snapshot and NDJSON.
+- UI: Home shows HCE; Neurometrics adds HCE chart; Home callback hardened and output order fixed.
+- Turrell: runner passes ndjson/mode, --hud, --quality 4k, display selection, q-metric, no-freeze; safer stop.
+- Environment: warns when NDJSON emit is off; “Enable NDJSON” button retained.
+- Paths: ensure baselines/ directory is created; profile default baseline_path set.
+- Engine: baseline status logged on init; state history carries HCE/HCE_raw; NDJSON remains schema-compatible.
+

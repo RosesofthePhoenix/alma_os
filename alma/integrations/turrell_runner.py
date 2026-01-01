@@ -22,30 +22,41 @@ class TurrellRunner:
         self._last_error: Optional[str] = None
         self._stopping = False
 
-    def start(self, display: int = 0, fullscreen: bool = False, ndjson_path: Optional[str] = None) -> None:
+    def start(
+        self,
+        display: int = 0,
+        fullscreen: bool = False,
+        ndjson_path: Optional[str] = None,
+        q_metric: str = config.CANONICAL_Q,
+    ) -> None:
         with self._lock:
             if self._proc and self._proc.poll() is None:
                 return
             self._last_error = None
             self._stopping = False
 
-        ndjson = ndjson_path or str(config.STATE_STREAM_PATH)
-        mode_file = str(config.MODE_FILE_PATH)
+        ndjson_input = ndjson_path if ndjson_path else str(config.STATE_STREAM_PATH)
+        ndjson_resolved = Path(ndjson_input).expanduser()
+        if not ndjson_resolved.is_absolute():
+            ndjson_resolved = (config.ROOT_DIR / ndjson_resolved).resolve()
+        mode_file = Path(config.MODE_FILE_PATH).expanduser()
         script_path = Path(__file__).resolve().parents[2] / "external" / "xq_turrell_room_2d_v5_3_style_modes.py"
 
         cmd_parts = [
             "python",
             shlex.quote(str(script_path)),
             "--ndjson",
-            shlex.quote(ndjson),
+            shlex.quote(str(ndjson_resolved)),
             "--mode-file",
-            shlex.quote(mode_file),
+            shlex.quote(str(mode_file)),
             "--no-freeze-on-invalid",
             "--hud",
             "--quality",
             "4k",
             "--display",
             str(int(display)),
+            "--q-metric",
+            shlex.quote(q_metric or config.CANONICAL_Q),
         ]
         if fullscreen:
             cmd_parts.append("--fullscreen")
@@ -76,16 +87,31 @@ class TurrellRunner:
         threading.Thread(target=self._monitor_process, args=(proc,), daemon=True).start()
 
     def stop(self) -> None:
+        proc: Optional[subprocess.Popen[str]] = None
         with self._lock:
             if not self._proc or self._proc.poll() is not None:
                 self._proc = None
                 return
             self._stopping = True
+            proc = self._proc
+        if proc:
             try:
-                os.killpg(self._proc.pid, signal.SIGTERM)
+                os.killpg(proc.pid, signal.SIGTERM)
+                proc.wait(timeout=2.0)
             except ProcessLookupError:
                 pass
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+        with self._lock:
             self._proc = None
+            self._stopping = False
 
     def status(self) -> Dict[str, Optional[object]]:
         with self._lock:
