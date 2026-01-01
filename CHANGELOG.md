@@ -18,3 +18,8 @@
 - Bookmarks: “Bookmark Now” modal with label/note; snapshot_json persisted (includes HCE/X/Q); Recent Events shows bookmarks.
 - Stability/cleanup: removed bucket debug noise; readiness click-data mapping fixed; Spotify logging confirmed; persistence via SQLite intact.
 
+## v0.2.1 — HCE super-linear scaling + readiness heatmap rendering
+- HCE: switched to super-linear formula ( (q/denom)**1.5 * q ) with X-ema denom and 10k scaling for visibility; raw/masked and NDJSON/buckets carry scaled values.
+- Readiness: heatmap rendering fixed; click/hover populates “Why” with HCE/Q/X details; wall-clock timestamps; bucket count shown.
+- Neurometrics: HCE chart labeled as “raw (scaled)” with normalized trace intact.
+
