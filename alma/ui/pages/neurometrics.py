@@ -110,12 +110,12 @@ def _make_hce_fig(t: List[float], sliced: dict) -> go.Figure:
     )
     fig.update_layout(
         template="plotly_dark",
-        title="HCE (last 420s) — Raw & Normalized",
+        title="HCE (last 420s) — Raw (scaled) & Normalized",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=10, r=10, t=30, b=10),
         height=260,
-        yaxis=dict(title="HCE (raw)"),
+        yaxis=dict(title="HCE (raw, scaled)"),
         yaxis2=dict(title="HCE (z-score)", overlaying="y", side="right", showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=-0.2),
     )

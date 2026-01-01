@@ -34,6 +34,7 @@ STEP_N = FS_TARGET * STEP_SEC
 EPS = 1e-12
 EMA_ALPHA_X = 0.18
 HCE_DENOM_FLOOR = 1e-6
+HCE_SCALE = 10000.0  # Super-linear scaled HCE for enhanced transcendent sensitivity (2026-01-01)
 
 # Baseline fallbacks (used if no external baseline is loaded)
 F_BASE = np.linspace(1, 45, 45, dtype=float)
@@ -338,7 +339,7 @@ def compute_step_if_ready(cortex_state: Dict[str, object], now_s: Optional[float
     q = max(0.0, q_vf)
     x_hce = float(X_for_hce)
     denom = max(x_hce, HCE_DENOM_FLOOR)
-    hce = (q / denom) * float(np.log1p(q))
+    hce = ((q / denom) ** 1.5) * q
     if not validity:
         hce = 0.0
     if not np.isfinite(hce):
@@ -346,9 +347,13 @@ def compute_step_if_ready(cortex_state: Dict[str, object], now_s: Optional[float
 
     q_r = max(0.0, q_vf_raw)
     x_r = max(float(X_raw), HCE_DENOM_FLOOR)
-    hce_raw = (q_r / x_r) * float(np.log1p(q_r))
+    hce_raw = ((q_r / x_r) ** 1.5) * q_r
     if not np.isfinite(hce_raw):
         hce_raw = 0.0
+
+    # Scale for visibility in downstream charts/heatmaps.
+    hce *= HCE_SCALE
+    hce_raw *= HCE_SCALE
 
     state.history["HCE"].append(hce)
     state.history["HCE_raw"].append(hce_raw)

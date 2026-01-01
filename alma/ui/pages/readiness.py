@@ -82,59 +82,49 @@ def _blank_fig(title: str, height: int = 240) -> go.Figure:
 def _make_timeline(buckets: List[Dict[str, object]], title: str = "Readiness Map") -> go.Figure:
     if not buckets:
         return _blank_fig(title)
-    # Build an hourly heatmap-like bar view; color by label, intensity modulated by HCE.
-    fig = go.Figure()
+    # Build a 1-row heatmap; color intensity driven by HCE, color family by label.
+    start_times = []
+    labels = []
+    mean_hces = []
+    hover = []
     for b in buckets:
         start_ts = b.get("bucket_start_ts")
-        end_ts = b.get("bucket_end_ts")
-        if start_ts is None or end_ts is None:
+        if start_ts is None:
             continue
-        start_dt = dt.datetime.fromtimestamp(start_ts)
-        dur = max(end_ts - start_ts, 1.0)
         label = _classify_bucket(b)
-        color = LABEL_COLORS.get(label, "#9e9e9e")
-        hce = b.get("mean_HCE", 0.0) or 0.0
-        # Modulate opacity to reflect HCE magnitude (capped for clarity).
-        opacity = float(max(0.25, min(1.0, 2.5 * hce + 0.25)))
-        fig.add_trace(
-            go.Bar(
-                x=[dur],
-                y=["Readiness"],
-                base=[start_dt],
-                orientation="h",
-                marker_color=color,
-                opacity=opacity,
-                hovertemplate=(
-                    f"{label}<br>"
-                    "Start: %{base|%H:%M}<br>"
-                    "Duration: %{x:.0f}s<br>"
-                    "mean_X: %{customdata[0]:.3f}<br>"
-                    "mean_Q: %{customdata[1]:.3f}<br>"
-                    "mean_HCE: %{customdata[2]:.3f}<br>"
-                    "std_Q: %{customdata[3]:.3f}<br>"
-                    "Q_slope: %{customdata[4]:.4f}<br>"
-                    "Why: %{customdata[5]}<extra></extra>"
-                ),
-                customdata=[
-                    [
-                        b.get("mean_X", 0.0),
-                        b.get("mean_Q", 0.0),
-                        b.get("mean_HCE", 0.0),
-                        b.get("std_Q", 0.0),
-                        b.get("Q_slope", 0.0),
-                        _friendly_label(label),
-                        start_ts,
-                        end_ts,
-                    ]
-                ],
-                width=0.6,
-            )
+        start_times.append(dt.datetime.fromtimestamp(start_ts))
+        labels.append(label)
+        mean_hces.append(b.get("mean_HCE", 0.0) or 0.0)
+        hover.append(
+            f"{label}<br>"
+            f"Start: {dt.datetime.fromtimestamp(start_ts).strftime('%H:%M')}<br>"
+            f"mean_X: {b.get('mean_X',0):.3f}<br>"
+            f"mean_Q: {b.get('mean_Q',0):.3f}<br>"
+            f"mean_HCE: {b.get('mean_HCE',0):.3f}<br>"
+            f"std_Q: {b.get('std_Q',0):.3f}<br>"
+            f"Q_slope: {b.get('Q_slope',0):.4f}<br>"
+            f"Why: {_friendly_label(label)}"
         )
+    if not start_times:
+        return _blank_fig(title)
+
+    z = [mean_hces]
+    fig = go.Figure(
+        data=go.Heatmap(
+            x=start_times,
+            y=["Readiness"],
+            z=z,
+            text=hover,
+            hoverinfo="text",
+            colorscale="Viridis",
+            zmin=min(mean_hces) if mean_hces else 0,
+            zmax=max(mean_hces) if mean_hces else 1,
+            colorbar=dict(title="HCE (scaled)"),
+        )
+    )
     fig.update_layout(
         template="plotly_dark",
         title=title,
-        barmode="stack",
-        showlegend=False,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=10, r=10, t=40, b=40),
@@ -142,36 +132,33 @@ def _make_timeline(buckets: List[Dict[str, object]], title: str = "Readiness Map
         xaxis=dict(type="date", title="Time"),
         yaxis=dict(showticklabels=False),
     )
+    # Attach customdata for click selection
+    fig.data[0].customdata = [[bucket.get("bucket_start_ts", 0)] for bucket in buckets]
     return fig
 
 
 def _make_today_stripe(buckets: List[Dict[str, object]]) -> go.Figure:
     if not buckets:
         return _blank_fig("Today", height=120)
-    fig = go.Figure()
-    for b in buckets:
-        start_ts = b["bucket_start_ts"]
-        end_ts = b["bucket_end_ts"]
-        start_dt = dt.datetime.fromtimestamp(start_ts)
-        dur = max(end_ts - start_ts, 1.0)
-        label = _classify_bucket(b)
-        color = LABEL_COLORS.get(label, "#9e9e9e")
-        fig.add_trace(
-            go.Bar(
-                x=[dur],
-                y=["Today"],
-                base=[start_dt],
-                orientation="h",
-                marker_color=color,
-                opacity=float(max(0.25, min(1.0, 2.5 * (b.get("mean_HCE", 0.0) or 0.0) + 0.25))),
-                hovertemplate=f"{label}<extra></extra>",
-                width=0.6,
-            )
+    start_times = [dt.datetime.fromtimestamp(b["bucket_start_ts"]) for b in buckets if b.get("bucket_start_ts")]
+    if not start_times:
+        return _blank_fig("Today", height=120)
+    mean_hces = [b.get("mean_HCE", 0.0) or 0.0 for b in buckets if b.get("bucket_start_ts")]
+    fig = go.Figure(
+        data=go.Heatmap(
+            x=start_times,
+            y=["Today"],
+            z=[mean_hces],
+            colorscale="Viridis",
+            zmin=min(mean_hces) if mean_hces else 0,
+            zmax=max(mean_hces) if mean_hces else 1,
+            hoverinfo="x+z",
+            colorbar=dict(title="HCE (scaled)"),
         )
+    )
     fig.update_layout(
         template="plotly_dark",
         title="Today",
-        barmode="stack",
         showlegend=False,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -287,9 +274,10 @@ def update_why(click_data, buckets):
         return "No data yet."
     bucket = None
     if click_data and click_data.get("points"):
-        cd = click_data["points"][0].get("customdata", [])
-        if len(cd) >= 8:
-            start_ts = cd[6]
+        point = click_data["points"][0]
+        cd = point.get("customdata")
+        if cd:
+            start_ts = cd[0] if isinstance(cd, (list, tuple)) else cd
             for b in buckets:
                 if abs(b.get("bucket_start_ts", 0) - start_ts) < 1e-6:
                     bucket = b
