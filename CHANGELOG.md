@@ -10,3 +10,11 @@
 - Paths: ensure baselines/ directory is created; profile default baseline_path set.
 - Engine: baseline status logged on init; state history carries HCE/HCE_raw; NDJSON remains schema-compatible.
 
+## v0.2 — Readiness + HCE + NDJSON persistence + bookmarking
+- Readiness Map: HCE-aware labels (ELEVATION), opacity by mean_HCE, hover “Why” details, bucket count indicator, wall-clock bucket timestamps.
+- Buckets: mean_HCE persisted; aggregation uses masked metrics; readiness now populates correctly.
+- NDJSON toggle: session-scoped store shared across pages with global indicator; Environment sync fixed.
+- Neurometrics: adds HCE z-score trace alongside raw.
+- Bookmarks: “Bookmark Now” modal with label/note; snapshot_json persisted (includes HCE/X/Q); Recent Events shows bookmarks.
+- Stability/cleanup: removed bucket debug noise; readiness click-data mapping fixed; Spotify logging confirmed; persistence via SQLite intact.
+
