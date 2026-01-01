@@ -295,21 +295,27 @@ class StateEngine:
                 return [arr[i] for i in idx if i < len(arr)]
 
             q_series = take("Q_vibe_focus")
+            hce_series = take("HCE")
             x_series = take("X")
             valid_series = take("valid")
+            ts_unix_series = take("ts_unix")
+
         if not q_series or not x_series or not valid_series:
             return
-        q_arr = np.array([v for v in q_series if v is not None], dtype=float)
-        x_arr = np.array([v for v in x_series if v is not None], dtype=float)
+        q_arr = np.array([v for v in q_series if v is not None and np.isfinite(v)], dtype=float)
+        hce_arr = np.array([v for v in hce_series if v is not None and np.isfinite(v)], dtype=float)
+        x_arr = np.array([v for v in x_series if v is not None and np.isfinite(v)], dtype=float)
         v_arr = np.array([1.0 if bool(v) else 0.0 for v in valid_series], dtype=float)
         if q_arr.size == 0 or x_arr.size == 0 or v_arr.size == 0:
             return
         mean_X = float(np.nanmean(x_arr))
         mean_Q = float(np.nanmean(q_arr))
+        mean_HCE = float(np.nanmean(hce_arr)) if hce_arr.size else 0.0
         std_Q = float(np.nanstd(q_arr))
         valid_fraction = float(np.nanmean(v_arr))
 
         t_slice = np.array([t[i] for i in idx], dtype=float)
+        ts_unix_slice = np.array([ts_unix_series[i] for i in range(len(ts_unix_series)) if i in idx], dtype=float) if ts_unix_series else np.array([], dtype=float)
         try:
             if t_slice.size >= 2 and not np.allclose(t_slice, t_slice[0]):
                 slope, _ = np.polyfit(t_slice, q_arr, 1)
@@ -321,13 +327,17 @@ class StateEngine:
 
         label = self._label_bucket(mean_X, std_Q, Q_slope, valid_fraction)
 
+        start_ts_unix = float(ts_unix_slice[0]) if ts_unix_slice.size else float(time.time() - window_s)
+        end_ts_unix = float(ts_unix_slice[-1]) if ts_unix_slice.size else float(time.time())
+
         try:
             storage.upsert_bucket(
-                bucket_start_ts=float(t_slice[0]),
-                bucket_end_ts=float(t_slice[-1]),
+                bucket_start_ts=start_ts_unix,
+                bucket_end_ts=end_ts_unix,
                 session_id=self._session_id,
                 mean_X=mean_X,
                 mean_Q=mean_Q,
+                mean_HCE=mean_HCE,
                 std_Q=std_Q,
                 Q_slope=Q_slope,
                 valid_fraction=valid_fraction,

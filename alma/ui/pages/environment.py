@@ -92,14 +92,17 @@ layout = dbc.Container(
 @callback(
     Output("env-status-text", "children"),
     Output("env-ndjson-warning", "children"),
+    Output("ndjson-emit-store", "data", allow_duplicate=True),
     Input("env-interval", "n_intervals"),
     Input("env-start-turrell", "n_clicks"),
     Input("env-stop-turrell", "n_clicks"),
     Input("env-enable-ndjson", "n_clicks"),
     State("env-display", "value"),
     State("env-fullscreen", "value"),
+    State("ndjson-emit-store", "data"),
+    prevent_initial_call=True,
 )
-def handle_turrell(_n, start_clicks, stop_clicks, enable_ndjson_clicks, display, fullscreen_values):
+def handle_turrell(_n, start_clicks, stop_clicks, enable_ndjson_clicks, display, fullscreen_values, ndjson_store):
     runner = registry.turrell_runner
     engine = registry.state_engine
     fullscreen = "fullscreen" in (fullscreen_values or [])
@@ -108,6 +111,12 @@ def handle_turrell(_n, start_clicks, stop_clicks, enable_ndjson_clicks, display,
     # NDJSON status
     engine_status = engine.get_status()
     ndjson_on = bool(engine_status.get("emit_ndjson"))
+    ndjson_state = bool(ndjson_store) if ndjson_store is not None else ndjson_on
+    try:
+        engine.set_emit_ndjson(ndjson_state)
+        ndjson_on = ndjson_state
+    except Exception:
+        pass
 
     warning_text = ""
     ndjson_off_msg = "NDJSON emit is OFF — Turrell will appear static. Enable NDJSON emit first."
@@ -115,6 +124,7 @@ def handle_turrell(_n, start_clicks, stop_clicks, enable_ndjson_clicks, display,
         try:
             engine.set_emit_ndjson(True)
             ndjson_on = True
+            ndjson_state = True
             warning_text = "NDJSON emit enabled."
         except Exception as exc:
             warning_text = f"Failed to enable NDJSON emit: {exc}"
@@ -137,7 +147,7 @@ def handle_turrell(_n, start_clicks, stop_clicks, enable_ndjson_clicks, display,
         status_parts.append(f"Error: {st['last_error']}")
     if not warning_text and not ndjson_on:
         warning_text = ndjson_off_msg
-    return html.Div(" | ".join(status_parts)), warning_text
+    return html.Div(" | ".join(status_parts)), warning_text, ndjson_state
 
 
 def dash_triggered():

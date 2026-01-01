@@ -158,7 +158,7 @@ controls_card = dbc.Card(
                             sm=12,
                         ),
                         dbc.Col(
-                            dbc.Button("Bookmark Moment", id="home-bookmark-btn", color="primary", className="mt-4"),
+                            dbc.Button("Bookmark Now", id="home-bookmark-btn", color="primary", className="mt-4"),
                             md=2,
                             sm=12,
                         ),
@@ -174,7 +174,6 @@ controls_card = dbc.Card(
                     ),
                     className="page-card mt-2",
                 ),
-                dcc.Store(id="home-ndjson-enabled", data=False),
                 dcc.Interval(id="home-status-interval", interval=1000, n_intervals=0),
             ]
         ),
@@ -182,10 +181,34 @@ controls_card = dbc.Card(
     className="page-card",
 )
 
+# Bookmark modal for richer note entry
+bookmark_modal = dbc.Modal(
+    [
+        dbc.ModalHeader(dbc.ModalTitle("Bookmark Now")),
+        dbc.ModalBody(
+            [
+                dbc.Label("Label"),
+                dbc.Input(id="home-bookmark-label", value="moment", placeholder="moment"),
+                dbc.Label("Note", className="mt-2"),
+                dbc.Textarea(id="home-bookmark-note", placeholder="What’s happening right now?"),
+            ]
+        ),
+        dbc.ModalFooter(
+            [
+                dbc.Button("Cancel", id="home-bookmark-cancel", color="secondary", className="me-2"),
+                dbc.Button("Save Bookmark", id="home-bookmark-save", color="primary"),
+            ]
+        ),
+    ],
+    id="home-bookmark-modal",
+    is_open=False,
+)
+
 layout = dbc.Container(
     [
         status_strip,
         controls_card,
+        bookmark_modal,
         dbc.Card(
             [
                 dbc.CardHeader("Home"),
@@ -218,7 +241,8 @@ layout = dbc.Container(
     Output("home-start-muse-btn", "disabled"),
     Output("home-stop-muse-btn", "disabled"),
     Output("home-toggle-ndjson-btn", "children"),
-    Output("home-ndjson-enabled", "data"),
+    Output("home-toggle-ndjson-btn", "color"),
+    Output("ndjson-emit-store", "data"),
     Output("home-muse-address", "value"),
     Input("home-status-interval", "n_intervals"),
     Input("home-start-engine-btn", "n_clicks"),
@@ -229,10 +253,13 @@ layout = dbc.Container(
     Input("home-start-spotify-btn", "n_clicks"),
     Input("home-stop-spotify-btn", "n_clicks"),
     Input("home-bookmark-btn", "n_clicks"),
+    Input("home-bookmark-save", "n_clicks"),
     State("home-muse-address", "value"),
-    State("home-ndjson-enabled", "data"),
+    State("ndjson-emit-store", "data"),
     State("home-event-label", "value"),
     State("home-event-note", "value"),
+    State("home-bookmark-label", "value"),
+    State("home-bookmark-note", "value"),
 )
 def update_home_status(
     _interval,
@@ -244,10 +271,13 @@ def update_home_status(
     start_spotify_clicks,
     stop_spotify_clicks,
     bookmark_clicks,
+    bookmark_save_clicks,
     muse_address,
     ndjson_enabled,
     event_label,
     event_note,
+    modal_label,
+    modal_note,
 ):
     triggered = ctx.triggered_id
     muse_error = ""
@@ -291,6 +321,9 @@ def update_home_status(
     elif triggered == "home-stop-spotify-btn":
         spotify_logger.stop()
     elif triggered == "home-bookmark-btn":
+        # Open modal handled in separate callback; no state change here
+        pass
+    elif triggered == "home-bookmark-save":
         ts_now = time.time()
         latest = latest_for_events or {}
         bucket = None
@@ -305,18 +338,20 @@ def update_home_status(
                 ts=ts_now,
                 session_id=session_id or "",
                 kind="manual",
-                label=(event_label or "moment"),
-                note=(event_note or ""),
+                label=(modal_label or event_label or "moment"),
+                note=(modal_note or event_note or ""),
                 tags_json={"page": "home"},
                 context_json={
                     "snapshot": {
                         "X": latest.get("X"),
                         "Q_vibe_focus": latest.get("Q_vibe_focus"),
+                        "HCE": latest.get("HCE"),
                     },
                     "bucket": {"label": bucket.get("label")} if bucket else {},
                     "mode": _read_mode(),
                     "now_playing": now_play_latest,
                 },
+                snapshot_json=latest,
             )
         except Exception:
             pass
@@ -433,6 +468,7 @@ def update_home_status(
     stop_muse_disabled = not muse_running
 
     ndjson_label = f"Toggle NDJSON Emit ({'On' if ndjson_state else 'Off'})"
+    ndjson_color = "success" if ndjson_state else "secondary"
     address_value = (muse_address or profile_address or "").strip()
 
     return (
@@ -454,7 +490,28 @@ def update_home_status(
         start_muse_disabled,
         stop_muse_disabled,
         ndjson_label,
+        ndjson_color,
         ndjson_state,
         address_value,
     )
+
+
+@callback(
+    Output("home-bookmark-modal", "is_open"),
+    Output("home-bookmark-label", "value"),
+    Output("home-bookmark-note", "value"),
+    Input("home-bookmark-btn", "n_clicks"),
+    Input("home-bookmark-save", "n_clicks"),
+    Input("home-bookmark-cancel", "n_clicks"),
+    State("home-bookmark-modal", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_bookmark_modal(open_click, save_click, cancel_click, is_open):
+    triggered_id = ctx.triggered_id
+    if triggered_id == "home-bookmark-save" or triggered_id == "home-bookmark-cancel":
+        # Close after save or cancel
+        return False, "moment", ""
+    if triggered_id == "home-bookmark-btn":
+        return True, "moment", ""
+    return is_open, dash.no_update, dash.no_update
 

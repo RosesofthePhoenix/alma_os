@@ -48,6 +48,7 @@ def init_db() -> None:
                 session_id TEXT,
                 mean_X REAL,
                 mean_Q REAL,
+                mean_HCE REAL,
                 std_Q REAL,
                 Q_slope REAL,
                 valid_fraction REAL,
@@ -65,10 +66,20 @@ def init_db() -> None:
                 label TEXT,
                 note TEXT,
                 tags_json TEXT,
-                context_json TEXT
+                context_json TEXT,
+                snapshot_json TEXT
             )
             """
         )
+        # backfill columns for existing installs
+        try:
+            cur.execute("ALTER TABLE buckets ADD COLUMN mean_HCE REAL")
+        except Exception:
+            pass
+        try:
+            cur.execute("ALTER TABLE events ADD COLUMN snapshot_json TEXT")
+        except Exception:
+            pass
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS spotify_playback (
@@ -217,6 +228,7 @@ def upsert_bucket(
     session_id: str,
     mean_X: float,
     mean_Q: float,
+    mean_HCE: float,
     std_Q: float,
     Q_slope: float,
     valid_fraction: float,
@@ -226,8 +238,8 @@ def upsert_bucket(
         conn.execute(
             """
             INSERT OR REPLACE INTO buckets
-            (bucket_start_ts, bucket_end_ts, session_id, mean_X, mean_Q, std_Q, Q_slope, valid_fraction, label)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (bucket_start_ts, bucket_end_ts, session_id, mean_X, mean_Q, mean_HCE, std_Q, Q_slope, valid_fraction, label)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 bucket_start_ts,
@@ -235,6 +247,7 @@ def upsert_bucket(
                 session_id,
                 mean_X,
                 mean_Q,
+                mean_HCE,
                 std_Q,
                 Q_slope,
                 valid_fraction,
@@ -252,12 +265,13 @@ def insert_event(
     note: str = "",
     tags_json: Optional[dict] = None,
     context_json: Optional[dict] = None,
+    snapshot_json: Optional[dict] = None,
 ) -> None:
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO events (ts, session_id, kind, label, note, tags_json, context_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO events (ts, session_id, kind, label, note, tags_json, context_json, snapshot_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ts,
@@ -267,6 +281,7 @@ def insert_event(
                 note,
                 json.dumps(tags_json or {}),
                 json.dumps(context_json or {}),
+                json.dumps(snapshot_json or {}),
             ),
         )
         conn.commit()
@@ -334,7 +349,7 @@ def get_buckets_for_date(date_str: str, tz_local: bool = True) -> List[Dict[str,
 
 def get_buckets_between(ts0: float, ts1: float, session_id: Optional[str] = None) -> List[Dict[str, object]]:
     query = """
-        SELECT bucket_start_ts, bucket_end_ts, session_id, mean_X, mean_Q, std_Q, Q_slope, valid_fraction, label
+        SELECT bucket_start_ts, bucket_end_ts, session_id, mean_X, mean_Q, mean_HCE, std_Q, Q_slope, valid_fraction, label
         FROM buckets
         WHERE bucket_start_ts >= ? AND bucket_end_ts <= ?
     """
@@ -352,7 +367,7 @@ def get_bucket_by_start(bucket_start_ts: float, session_id: str) -> Optional[Dic
     with _connect() as conn:
         cur = conn.execute(
             """
-            SELECT bucket_start_ts, bucket_end_ts, session_id, mean_X, mean_Q, std_Q, Q_slope, valid_fraction, label
+            SELECT bucket_start_ts, bucket_end_ts, session_id, mean_X, mean_Q, mean_HCE, std_Q, Q_slope, valid_fraction, label
             FROM buckets
             WHERE bucket_start_ts = ? AND session_id = ?
             """,

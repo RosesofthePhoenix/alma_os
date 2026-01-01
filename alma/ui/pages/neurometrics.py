@@ -2,6 +2,7 @@ from typing import List
 
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
+import pandas as pd
 from dash import Input, Output, callback, dcc, html
 
 from alma.app_state import registry
@@ -84,15 +85,39 @@ def _make_hce_fig(t: List[float], sliced: dict) -> go.Figure:
     y = sliced.get("HCE", [])
     if not t or not y:
         return _blank_fig("HCE")
+
+    # Rolling z-score over the last 420s to highlight relative elevations (raw preserved for diagnostics).
+    try:
+        series = pd.Series(y, dtype="float64")
+        window = min(420, len(series))
+        rolling_mean = series.rolling(window=window, min_periods=60).mean()
+        rolling_std = series.rolling(window=window, min_periods=60).std()
+        zscore = (series - rolling_mean) / (rolling_std + 1e-8)
+    except Exception:
+        zscore = pd.Series([None] * len(y))
+
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=t, y=y, mode="lines", name="HCE", line=dict(color="#6be28c")))
+    fig.add_trace(go.Scatter(x=t, y=y, mode="lines", name="HCE (raw)", line=dict(color="#6be28c")))
+    fig.add_trace(
+        go.Scatter(
+            x=t,
+            y=zscore.tolist(),
+            mode="lines",
+            name="HCE (z-score)",
+            line=dict(color="#00c853", dash="dash"),
+            yaxis="y2",
+        )
+    )
     fig.update_layout(
         template="plotly_dark",
-        title="HCE (last 420s)",
+        title="HCE (last 420s) — Raw & Normalized",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=10, r=10, t=30, b=10),
         height=260,
+        yaxis=dict(title="HCE (raw)"),
+        yaxis2=dict(title="HCE (z-score)", overlaying="y", side="right", showgrid=False),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.2),
     )
     return fig
 
