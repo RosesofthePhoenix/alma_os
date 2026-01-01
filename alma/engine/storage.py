@@ -1,0 +1,580 @@
+"""Lightweight SQLite storage for sessions, buckets, events, and Spotify playback."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import time
+import uuid
+from collections import Counter
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import numpy as np
+
+from alma import config
+
+
+def _connect() -> sqlite3.Connection:
+    config.ensure_required_paths()
+    db_path = Path(config.DB_PATH)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return sqlite3.connect(db_path)
+
+
+def init_db() -> None:
+    """Create tables if they do not exist."""
+    with _connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                started_at REAL,
+                ended_at REAL,
+                profile_path TEXT,
+                muse_address TEXT,
+                lsl_stream_name TEXT,
+                ndjson_path TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS buckets (
+                bucket_start_ts REAL,
+                bucket_end_ts REAL,
+                session_id TEXT,
+                mean_X REAL,
+                mean_Q REAL,
+                std_Q REAL,
+                Q_slope REAL,
+                valid_fraction REAL,
+                label TEXT,
+                PRIMARY KEY(bucket_start_ts, session_id)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                ts REAL,
+                session_id TEXT,
+                kind TEXT,
+                label TEXT,
+                note TEXT,
+                tags_json TEXT,
+                context_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS spotify_playback (
+                ts REAL,
+                session_id TEXT,
+                is_playing INTEGER,
+                track_id TEXT,
+                track_name TEXT,
+                artists TEXT,
+                album TEXT,
+                context_uri TEXT,
+                device_name TEXT,
+                progress_ms INTEGER,
+                duration_ms INTEGER,
+                mode TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recipes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                mode TEXT,
+                target_json TEXT,
+                steps_md TEXT,
+                stats_json TEXT
+            )
+            """
+        )
+        # Backfill stats_json column if table exists without it
+        try:
+            cur.execute("ALTER TABLE recipes ADD COLUMN stats_json TEXT")
+        except Exception:
+            pass
+        conn.commit()
+
+
+def add_schedule_block(title: str, block_type: str, duration_min: int, flexible: bool, start_ts: float, end_ts: float) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO schedule_blocks (title, block_type, duration_min, flexible, start_ts, end_ts)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (title, block_type, int(duration_min), 1 if flexible else 0, start_ts, end_ts),
+        )
+        conn.commit()
+
+
+def list_schedule_blocks_for_date(date_str: str) -> List[Dict[str, object]]:
+    ts0, ts1 = _ts_bounds_for_date(date_str)
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT title, block_type, duration_min, flexible, start_ts, end_ts
+            FROM schedule_blocks
+            WHERE start_ts >= ? AND start_ts < ?
+            ORDER BY start_ts ASC
+            """,
+            (ts0, ts1),
+        )
+        return _rows_to_dicts(cur)
+
+
+# Recipes
+def list_recipes() -> List[Dict[str, object]]:
+    with _connect() as conn:
+        cur = conn.execute("SELECT id, name, mode, target_json, steps_md, stats_json FROM recipes ORDER BY id DESC")
+        rows = _rows_to_dicts(cur)
+        for r in rows:
+            try:
+                r["target_json"] = json.loads(r.get("target_json") or "{}")
+            except Exception:
+                r["target_json"] = {}
+            try:
+                r["stats_json"] = json.loads(r.get("stats_json") or "{}")
+            except Exception:
+                r["stats_json"] = {}
+        return rows
+
+
+def upsert_recipe(recipe_id: Optional[int], name: str, mode: str, target_json: dict, steps_md: str) -> int:
+    with _connect() as conn:
+        if recipe_id:
+            conn.execute(
+                "UPDATE recipes SET name=?, mode=?, target_json=?, steps_md=? WHERE id=?",
+                (name, mode, json.dumps(target_json or {}), steps_md, recipe_id),
+            )
+            conn.commit()
+            return recipe_id
+        cur = conn.execute(
+            "INSERT INTO recipes (name, mode, target_json, steps_md, stats_json) VALUES (?, ?, ?, ?, ?)",
+            (name, mode, json.dumps(target_json or {}), steps_md, json.dumps({})),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def get_recipe_by_id(recipe_id: int) -> Optional[Dict[str, object]]:
+    with _connect() as conn:
+        cur = conn.execute(
+            "SELECT id, name, mode, target_json, steps_md, stats_json FROM recipes WHERE id=?",
+            (recipe_id,),
+        )
+        rows = _rows_to_dicts(cur)
+        if not rows:
+            return None
+        r = rows[0]
+        try:
+            r["target_json"] = json.loads(r.get("target_json") or "{}")
+        except Exception:
+            r["target_json"] = {}
+        try:
+            r["stats_json"] = json.loads(r.get("stats_json") or "{}")
+        except Exception:
+            r["stats_json"] = {}
+        return r
+
+
+def start_session(profile_path: str, muse_address: str, lsl_stream_name: Optional[str], ndjson_path: str) -> str:
+    init_db()
+    session_id = str(uuid.uuid4())
+    started_at = time.time()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO sessions (id, started_at, ended_at, profile_path, muse_address, lsl_stream_name, ndjson_path)
+            VALUES (?, ?, NULL, ?, ?, ?, ?)
+            """,
+            (session_id, started_at, profile_path, muse_address, lsl_stream_name, ndjson_path),
+        )
+        conn.commit()
+    return session_id
+
+
+def end_session(session_id: str) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE sessions SET ended_at=? WHERE id=?", (time.time(), session_id))
+        conn.commit()
+
+
+def upsert_bucket(
+    bucket_start_ts: float,
+    bucket_end_ts: float,
+    session_id: str,
+    mean_X: float,
+    mean_Q: float,
+    std_Q: float,
+    Q_slope: float,
+    valid_fraction: float,
+    label: str,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO buckets
+            (bucket_start_ts, bucket_end_ts, session_id, mean_X, mean_Q, std_Q, Q_slope, valid_fraction, label)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                bucket_start_ts,
+                bucket_end_ts,
+                session_id,
+                mean_X,
+                mean_Q,
+                std_Q,
+                Q_slope,
+                valid_fraction,
+                label,
+            ),
+        )
+        conn.commit()
+
+
+def insert_event(
+    ts: float,
+    session_id: str,
+    kind: str,
+    label: str = "",
+    note: str = "",
+    tags_json: Optional[dict] = None,
+    context_json: Optional[dict] = None,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO events (ts, session_id, kind, label, note, tags_json, context_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ts,
+                session_id,
+                kind,
+                label,
+                note,
+                json.dumps(tags_json or {}),
+                json.dumps(context_json or {}),
+            ),
+        )
+        conn.commit()
+
+
+def insert_spotify_row(
+    ts: float,
+    session_id: str,
+    is_playing: bool,
+    track_id: str = "",
+    track_name: str = "",
+    artists: str = "",
+    album: str = "",
+    context_uri: str = "",
+    device_name: str = "",
+    progress_ms: Optional[int] = None,
+    duration_ms: Optional[int] = None,
+    mode: str = "",
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO spotify_playback
+            (ts, session_id, is_playing, track_id, track_name, artists, album, context_uri, device_name, progress_ms, duration_ms, mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ts,
+                session_id,
+                1 if is_playing else 0,
+                track_id,
+                track_name,
+                artists,
+                album,
+                context_uri,
+                device_name,
+                progress_ms,
+                duration_ms,
+                mode,
+            ),
+        )
+        conn.commit()
+
+
+def _rows_to_dicts(cursor) -> List[Dict[str, object]]:
+    cols = [c[0] for c in cursor.description]
+    return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+
+def _ts_bounds_for_date(date_str: str, tz_local: bool = True) -> tuple[float, float]:
+    if tz_local:
+        start = datetime.fromisoformat(date_str)
+    else:
+        start = datetime.fromisoformat(date_str)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+    return start.timestamp(), end.timestamp()
+
+
+def get_buckets_for_date(date_str: str, tz_local: bool = True) -> List[Dict[str, object]]:
+    ts0, ts1 = _ts_bounds_for_date(date_str, tz_local=tz_local)
+    return get_buckets_between(ts0, ts1, session_id=None)
+
+
+def get_buckets_between(ts0: float, ts1: float, session_id: Optional[str] = None) -> List[Dict[str, object]]:
+    query = """
+        SELECT bucket_start_ts, bucket_end_ts, session_id, mean_X, mean_Q, std_Q, Q_slope, valid_fraction, label
+        FROM buckets
+        WHERE bucket_start_ts >= ? AND bucket_end_ts <= ?
+    """
+    params: List[object] = [ts0, ts1]
+    if session_id:
+        query += " AND session_id = ?"
+        params.append(session_id)
+    query += " ORDER BY bucket_start_ts ASC"
+    with _connect() as conn:
+        cur = conn.execute(query, params)
+        return _rows_to_dicts(cur)
+
+
+def get_bucket_by_start(bucket_start_ts: float, session_id: str) -> Optional[Dict[str, object]]:
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT bucket_start_ts, bucket_end_ts, session_id, mean_X, mean_Q, std_Q, Q_slope, valid_fraction, label
+            FROM buckets
+            WHERE bucket_start_ts = ? AND session_id = ?
+            """,
+            (bucket_start_ts, session_id),
+        )
+        rows = _rows_to_dicts(cur)
+        return rows[0] if rows else None
+
+
+def get_events_between(ts0: float, ts1: float, session_id: Optional[str] = None) -> List[Dict[str, object]]:
+    query = """
+        SELECT ts, session_id, kind, label, note, tags_json, context_json
+        FROM events
+        WHERE ts >= ? AND ts <= ?
+    """
+    params: List[object] = [ts0, ts1]
+    if session_id:
+        query += " AND session_id = ?"
+        params.append(session_id)
+    query += " ORDER BY ts ASC"
+    with _connect() as conn:
+        cur = conn.execute(query, params)
+        rows = _rows_to_dicts(cur)
+        for r in rows:
+            r["tags_json"] = json.loads(r.get("tags_json") or "{}")
+            r["context_json"] = json.loads(r.get("context_json") or "{}")
+        return rows
+
+
+def get_spotify_between(ts0: float, ts1: float, session_id: Optional[str] = None) -> List[Dict[str, object]]:
+    query = """
+        SELECT ts, session_id, is_playing, track_id, track_name, artists, album, context_uri, device_name, progress_ms, duration_ms, mode
+        FROM spotify_playback
+        WHERE ts >= ? AND ts <= ?
+    """
+    params: List[object] = [ts0, ts1]
+    if session_id:
+        query += " AND session_id = ?"
+        params.append(session_id)
+    query += " ORDER BY ts ASC"
+    with _connect() as conn:
+        cur = conn.execute(query, params)
+        return _rows_to_dicts(cur)
+
+
+def get_latest_spotify(session_id: Optional[str] = None) -> Optional[Dict[str, object]]:
+    query = """
+        SELECT ts, session_id, is_playing, track_id, track_name, artists, album, context_uri, device_name, progress_ms, duration_ms, mode
+        FROM spotify_playback
+    """
+    params: List[object] = []
+    if session_id:
+        query += " WHERE session_id = ?"
+        params.append(session_id)
+    query += " ORDER BY ts DESC LIMIT 1"
+    with _connect() as conn:
+        cur = conn.execute(query, params)
+        rows = _rows_to_dicts(cur)
+        return rows[0] if rows else None
+
+
+def list_recent_events(limit: int = 20, session_id: Optional[str] = None) -> List[Dict[str, object]]:
+    query = """
+        SELECT ts, session_id, kind, label, note, tags_json, context_json
+        FROM events
+    """
+    params: List[object] = []
+    if session_id:
+        query += " WHERE session_id = ?"
+        params.append(session_id)
+    query += " ORDER BY ts DESC LIMIT ?"
+    params.append(limit)
+    with _connect() as conn:
+        cur = conn.execute(query, params)
+        rows = _rows_to_dicts(cur)
+        for r in rows:
+            r["tags_json"] = json.loads(r.get("tags_json") or "{}")
+            r["context_json"] = json.loads(r.get("context_json") or "{}")
+        return rows
+
+
+def get_context_for_window(ts0: float, ts1: float, session_id: Optional[str] = None) -> Dict[str, object]:
+    buckets = get_buckets_between(ts0, ts1, session_id=session_id)
+    events = get_events_between(ts0, ts1, session_id=session_id)
+    spotify_rows = get_spotify_between(ts0, ts1, session_id=session_id)
+
+    top_tracks = []
+    if spotify_rows:
+        key_counts = Counter()
+        last_ts: Dict[str, float] = {}
+        for row in spotify_rows:
+            key = (row.get("track_name") or "", row.get("artists") or "")
+            key_counts[key] += 1
+            last_ts[key] = row.get("ts", 0)
+        top = key_counts.most_common(5)
+        top_tracks = [
+            {"track_name": k[0], "artists": k[1], "count": cnt, "last_ts": last_ts.get(k)}
+            for (k, cnt) in top
+        ]
+
+    bucket_summary = None
+    if buckets:
+        last = buckets[-1]
+        bucket_summary = {
+            "label": last.get("label"),
+            "mean_Q": last.get("mean_Q"),
+            "mean_X": last.get("mean_X"),
+            "std_Q": last.get("std_Q"),
+            "Q_slope": last.get("Q_slope"),
+            "bucket_start_ts": last.get("bucket_start_ts"),
+            "bucket_end_ts": last.get("bucket_end_ts"),
+        }
+
+    return {
+        "top_tracks": top_tracks,
+        "events": events,
+        "bucket_summary": bucket_summary,
+    }
+
+
+def _aggregate_buckets(buckets: List[Dict[str, object]]) -> Optional[Dict[str, float]]:
+    if not buckets:
+        return None
+    mean_X = float(np.nanmean([b.get("mean_X", 0.0) for b in buckets]))
+    mean_Q = float(np.nanmean([b.get("mean_Q", 0.0) for b in buckets]))
+    std_Q = float(np.nanmean([b.get("std_Q", 0.0) for b in buckets]))
+    slope = float(np.nanmean([b.get("Q_slope", 0.0) for b in buckets]))
+    return {"mean_X": mean_X, "mean_Q": mean_Q, "std_Q": std_Q, "slope": slope}
+
+
+def score_recipe_run(recipe_id: int, end_ts: float) -> None:
+    """Update recipe stats_json with run result using buckets around the run."""
+    recipe = get_recipe_by_id(recipe_id)
+    if not recipe:
+        return
+    target = recipe.get("target_json") or {}
+    defaults = {
+        "mean_X_min": -999,
+        "mean_Q_min": -999,
+        "std_Q_max": 999,
+        "slope_min": -999,
+    }
+    thresholds = {**defaults, **target}
+
+    # Find the most recent recipe_start for this recipe before end_ts
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT ts FROM events
+            WHERE kind='recipe_start'
+              AND tags_json LIKE ?
+              AND ts <= ?
+            ORDER BY ts DESC
+            LIMIT 1
+            """,
+            (f'%\"recipe_id\": {recipe_id}%', end_ts),
+        )
+        row = cur.fetchone()
+        if not row:
+            return
+        start_ts = row[0]
+
+    pre_start = start_ts - 600  # 10 minutes before
+    pre_end = start_ts
+    during_start = start_ts
+    during_end = end_ts
+
+    pre_buckets = get_buckets_between(pre_start, pre_end, session_id=None)
+    during_buckets = get_buckets_between(during_start, during_end, session_id=None)
+
+    pre_feat = _aggregate_buckets(pre_buckets) or {}
+    during_feat = _aggregate_buckets(during_buckets) or {}
+
+    success = False
+    if during_feat:
+        success = (
+            during_feat.get("mean_X", -999) >= thresholds["mean_X_min"]
+            and during_feat.get("mean_Q", -999) >= thresholds["mean_Q_min"]
+            and during_feat.get("std_Q", 999) <= thresholds["std_Q_max"]
+            and during_feat.get("slope", -999) >= thresholds["slope_min"]
+        )
+
+    stats = recipe.get("stats_json") or {}
+    runs = int(stats.get("runs", 0)) + 1
+    successes = int(stats.get("successes", 0)) + (1 if success else 0)
+    stats["runs"] = runs
+    stats["successes"] = successes
+    stats["last_run_summary"] = {
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "pre": pre_feat,
+        "during": during_feat,
+        "success": success,
+    }
+
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE recipes SET stats_json=? WHERE id=?",
+            (json.dumps(stats), recipe_id),
+        )
+        conn.commit()
+
+
+__all__ = [
+    "init_db",
+    "start_session",
+    "end_session",
+    "upsert_bucket",
+    "insert_event",
+    "insert_spotify_row",
+    "get_buckets_for_date",
+    "get_buckets_between",
+    "get_bucket_by_start",
+    "get_events_between",
+    "get_spotify_between",
+    "get_latest_spotify",
+    "list_recent_events",
+    "get_context_for_window",
+    "add_schedule_block",
+    "list_schedule_blocks_for_date",
+    "list_recipes",
+    "upsert_recipe",
+    "get_recipe_by_id",
+]
+

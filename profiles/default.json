@@ -1,0 +1,12 @@
+{
+  "profile": "default",
+  "description": "Placeholder profile for alma_os.",
+  "muse_address": "899F0D9E-61D9-D3DA-B3B2-8AA9210619E6",
+  "ndjson_state_path": "sessions/current/state_stream.ndjson",
+  "preferred_lsl_stream_name": "",
+  "SPOTIPY_CLIENT_ID": "c94c7280e5fc4459a8340a536b1d8e82",
+  "SPOTIPY_CLIENT_SECRET": "3824c0f9c00b495fb647f7b0d05be7cd",
+  "SPOTIPY_REDIRECT_URI": "http://127.0.0.1:8888/callback",
+  "SPOTIFY_PREFERRED_DEVICE": "iPhone",
+  "baseline_path": "baselines/baseline_global_muse_v1_revised.json"
+}
