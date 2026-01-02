@@ -122,6 +122,9 @@ layout = dbc.Container(
                             ],
                             className="g-3",
                         ),
+                        html.Hr(),
+                        html.Div("Quick Captures", className="fw-bold mb-2"),
+                        html.Div(id="mem-quick-list"),
                         dcc.Store(id="mem-buckets-store"),
                         dcc.Store(id="mem-events-store"),
                         dcc.Store(id="mem-selected-bucket"),
@@ -161,6 +164,37 @@ def _render_events(events: List[Dict[str, object]]) -> List[html.Div]:
             )
         )
     return rows or [html.Div("No events")]
+
+
+def _render_quick_captures(events: List[Dict[str, object]]) -> List[html.Div]:
+    rows = []
+    for e in events:
+        tags = e.get("tags_json") or {}
+        if (tags.get("kind") or e.get("kind")) != "quick_capture":
+            continue
+        ctx_json = e.get("context_json") or {}
+        ts = e.get("ts")
+        ts_txt = dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
+        mean_hce = ctx_json.get("mean_HCE", 0.0)
+        mean_q = ctx_json.get("mean_Q", 0.0)
+        mean_x = ctx_json.get("mean_X", 0.0)
+        media = ctx_json.get("media") or ""
+        track = ctx_json.get("track") or ""
+        note = e.get("note") or ""
+        rows.append(
+            dbc.Card(
+                dbc.CardBody(
+                    [
+                        html.Div(f"{ts_txt} — {note}", className="fw-bold"),
+                        html.Div(f"HCE={mean_hce:.2f} | Q={mean_q:.3f} | X={mean_x:.3f}", className="small text-muted"),
+                        html.Div(f"Media/Person: {media}" if media else "", className="small"),
+                        html.Div(f"Track: {track}" if track else "", className="small text-muted"),
+                    ]
+                ),
+                className="mb-2",
+            )
+        )
+    return rows or [html.Div("No quick captures")]
 
 
 def _render_buckets(buckets: List[Dict[str, object]]) -> List[html.Div]:
@@ -235,6 +269,7 @@ def _top_tracks(ts0: float, ts1: float, session_id: Optional[str]) -> List[str]:
     Output("mem-events-store", "data"),
     Output("mem-buckets-list", "children"),
     Output("mem-events-list", "children"),
+    Output("mem-quick-list", "children"),
     Input("mem-start", "date"),
     Input("mem-end", "date"),
     Input("mem-label-filter", "value"),
@@ -249,7 +284,8 @@ def load_memory(start_date, end_date, label_filter):
         buckets = [b for b in buckets if (b.get("label") == label_filter)]
     bucket_list = _render_buckets(buckets)
     event_list = _render_events(events)
-    return buckets, events, bucket_list, event_list
+    quick_list = _render_quick_captures(events)
+    return buckets, events, bucket_list, event_list, quick_list
 
 
 @callback(
