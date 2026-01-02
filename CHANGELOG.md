@@ -2,6 +2,7 @@
 
 ## v0.4 — Turrell hardening + Phase 4 UI/Spotify upgrades
 - Turrell Room v6/v7: runner targets v6; NDJSON follower reads from start and survives truncation; HUD/text is bulletproof (SysFont→freetype→pixel fallback), HUD forced ON with banner; hotkeys logged (H, 0–3 modes, F fullscreen, ESC double-press); display set_mode retry; stays up even without pygame.font.
+- Turrell visuals (v6 local): default drift 0.002; drift presets on 4/5/6/7; palette wobble tied to drift phase; drift clamp relaxed (0.001–2.5); render-only butter smoothing for X/Q; center portal fixed (no motion wobble); removed mandala bloom; HCE-fed intensity preserved.
 - Global UI: persistent live metrics bar (X/Q/HCE) plus Quick Capture panel (notes, window length, media/person) stored to events; NDJSON status indicator shared; quick captures surface in Memory page.
 - Contextual logging: bookmark modal enriched (social context, activity, mood/energy, environment, intention); events store snapshot_json with HCE.
 - Spotify analytics: track session logging/backfill for mean_HCE/Q/X; “Top tracks”/“Peak Track HCE” surfaced on Home; Resonance page reorganized—visuals first (HCE histogram, top artists by HCE, bar/scatter/timeline/corr, findings) with Top 20 table moved to bottom.
