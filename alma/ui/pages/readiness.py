@@ -25,6 +25,8 @@ LABEL_NOTES = {
     "RECOVERY": "Low activation + settling",
     "ENGAGEMENT": "Balanced activation + richness",
     "INSUFFICIENT_SIGNAL": "Not enough clean signal in this window",
+    "TRANSCENDENT": "Transcendent harmony: peak HCE — prioritize synthesis/insight",
+    "CONTEMPLATIVE": "Elevated HCE with calmer activation — reflective flow",
 }
 
 
@@ -134,6 +136,31 @@ def _make_timeline(buckets: List[Dict[str, object]], title: str = "Readiness Map
     )
     # Attach customdata for click selection
     fig.data[0].customdata = [[bucket.get("bucket_start_ts", 0)] for bucket in buckets]
+    # Gold outline for high-HCE buckets
+    shapes = []
+    for b in buckets:
+        start_ts = b.get("bucket_start_ts")
+        end_ts = b.get("bucket_end_ts", start_ts)
+        mean_hce = b.get("mean_HCE", 0.0) or 0.0
+        if start_ts and mean_hce >= 0.005:
+            x0 = dt.datetime.fromtimestamp(start_ts)
+            x1 = dt.datetime.fromtimestamp(end_ts)
+            shapes.append(
+                dict(
+                    type="rect",
+                    x0=x0,
+                    x1=x1,
+                    y0=-0.5,
+                    y1=0.5,
+                    xref="x",
+                    yref="y",
+                    line={"color": "#ffd700", "width": 2},
+                    fillcolor="rgba(0,0,0,0)",
+                    layer="above",
+                )
+            )
+    if shapes:
+        fig.update_layout(shapes=shapes)
     return fig
 
 
@@ -185,8 +212,14 @@ def _classify_bucket(b: Dict[str, object]) -> str:
 
     if valid_fraction < 0.5:
         return "INSUFFICIENT_SIGNAL"
+    if mean_HCE > 3.0:
+        return "TRANSCENDENT"
     if mean_X >= 0.65 and std_Q <= 0.12 and valid_fraction >= 0.9:
         return "DEEP_WORK"
+    if mean_HCE >= 2.0 and mean_X >= 0.5:
+        return "ELEVATION"
+    if mean_HCE >= 2.0 and mean_X < 0.5:
+        return "CONTEMPLATIVE"
     if mean_HCE >= 0.005 and mean_Q >= 0.03:
         return "ELEVATION"
     if q_slope > 0.0 and std_Q >= 0.18:
@@ -287,15 +320,21 @@ def update_why(click_data, buckets):
     label = _classify_bucket(bucket)
     note = _friendly_label(label)
     mean_hce = bucket.get("mean_HCE", 0.0) or 0.0
-    why = note
-    if label == "ELEVATION":
-        why = "Elevated HCE: strong harmonious elevation with balanced richness."
+    threshold = 3.0
+    if mean_hce >= threshold:
+        why = "Transcendent harmony — prioritize insight, synthesis, and reflective work."
+    elif mean_hce >= 2.0:
+        why = "Contemplative flow — elevated HCE with calm activation; great for reflective focus."
+    elif label == "ELEVATION":
+        why = "Harmonious elevation with balanced richness."
     elif label == "DEEP_WORK":
         why = "High activation with steady richness; stay in the flow."
     elif label == "IDEATION":
         why = "Rising richness with variability; good for brainstorming."
     elif label == "RECOVERY":
         why = "Low activation and stable; good for recharge."
+    else:
+        why = note
     return html.Div(
         [
             html.Div(f"Label: {label}", className="fw-bold"),

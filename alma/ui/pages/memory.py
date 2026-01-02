@@ -9,13 +9,14 @@ from dash import Input, Output, State, callback, dcc, html, MATCH, ALL, ctx
 
 from alma.engine import storage
 
-LABEL_OPTIONS = ["ALL", "DEEP_WORK", "IDEATION", "RECOVERY", "ENGAGEMENT", "INSUFFICIENT_SIGNAL"]
+LABEL_OPTIONS = ["ALL", "DEEP_WORK", "IDEATION", "RECOVERY", "ENGAGEMENT", "INSUFFICIENT_SIGNAL", "TRANSCENDENT"]
 LABEL_NOTES = {
     "DEEP_WORK": "High activation + steady richness",
     "IDEATION": "High variability + rising richness",
     "RECOVERY": "Low activation + settling",
     "ENGAGEMENT": "Balanced activation + richness",
     "INSUFFICIENT_SIGNAL": "Not enough clean signal",
+    "TRANSCENDENT": "HCE-driven harmony; prioritize synthesis/insight",
 }
 
 
@@ -63,6 +64,29 @@ layout = dbc.Container(
                                             id="mem-label-filter",
                                             options=[{"label": l, "value": l} for l in LABEL_OPTIONS],
                                             value="ALL",
+                                            clearable=False,
+                                        ),
+                                    ],
+                                    md=3,
+                                    sm=12,
+                                ),
+                                dbc.Col(
+                                    [
+                                        dbc.Label("Context filter"),
+                                        dcc.Dropdown(
+                                            id="mem-context-filter",
+                                            options=[
+                                                {"label": "Any", "value": "ANY"},
+                                                {"label": "Alone", "value": "alone"},
+                                                {"label": "With others", "value": "with"},
+                                                {"label": "Work", "value": "work"},
+                                                {"label": "Creative", "value": "creative"},
+                                                {"label": "Meditation", "value": "meditation"},
+                                                {"label": "Social", "value": "social"},
+                                                {"label": "Media", "value": "media"},
+                                                {"label": "Exercise", "value": "exercise"},
+                                            ],
+                                            value="ANY",
                                             clearable=False,
                                         ),
                                     ],
@@ -178,6 +202,7 @@ def _render_quick_captures(events: List[Dict[str, object]]) -> List[html.Div]:
         mean_hce = ctx_json.get("mean_HCE", 0.0)
         mean_q = ctx_json.get("mean_Q", 0.0)
         mean_x = ctx_json.get("mean_X", 0.0)
+        window_min = ctx_json.get("window_min")
         media = ctx_json.get("media") or ""
         track = ctx_json.get("track") or ""
         note = e.get("note") or ""
@@ -186,6 +211,7 @@ def _render_quick_captures(events: List[Dict[str, object]]) -> List[html.Div]:
                 dbc.CardBody(
                     [
                         html.Div(f"{ts_txt} — {note}", className="fw-bold"),
+                        html.Div(f"Window: {window_min} min" if window_min else "Window: —", className="small"),
                         html.Div(f"HCE={mean_hce:.2f} | Q={mean_q:.3f} | X={mean_x:.3f}", className="small text-muted"),
                         html.Div(f"Media/Person: {media}" if media else "", className="small"),
                         html.Div(f"Track: {track}" if track else "", className="small text-muted"),
@@ -264,6 +290,17 @@ def _top_tracks(ts0: float, ts1: float, session_id: Optional[str]) -> List[str]:
     return [names[k] for k, _ in top if k in names]
 
 
+def _matches_context(ev: Dict[str, object], ctx_filter: str) -> bool:
+    if ctx_filter == "ANY":
+        return True
+    tags = ev.get("tags_json") or {}
+    ctx_val = (tags.get("social") or "").lower()
+    activity = (tags.get("activity") or "").lower()
+    if ctx_filter in {"alone", "with"}:
+        return ctx_val == ctx_filter
+    return activity == ctx_filter
+
+
 @callback(
     Output("mem-buckets-store", "data"),
     Output("mem-events-store", "data"),
@@ -273,15 +310,22 @@ def _top_tracks(ts0: float, ts1: float, session_id: Optional[str]) -> List[str]:
     Input("mem-start", "date"),
     Input("mem-end", "date"),
     Input("mem-label-filter", "value"),
+    Input("mem-context-filter", "value"),
+    Input("qc-status", "children"),
 )
-def load_memory(start_date, end_date, label_filter):
+def load_memory(start_date, end_date, label_filter, ctx_filter, _qc_status):
     start_date = start_date or _date_str(0)
     end_date = end_date or _date_str(0)
     ts0, ts1 = _ts_bounds(start_date, end_date)
     buckets = storage.get_buckets_between(ts0, ts1, session_id=None)
     events = storage.get_events_between(ts0, ts1, session_id=None)
     if label_filter and label_filter != "ALL":
-        buckets = [b for b in buckets if (b.get("label") == label_filter)]
+        if label_filter == "TRANSCENDENT":
+            buckets = [b for b in buckets if (b.get("mean_HCE") or 0) > 3.0]
+        else:
+            buckets = [b for b in buckets if (b.get("label") == label_filter)]
+    if ctx_filter:
+        events = [e for e in events if _matches_context(e, ctx_filter)]
     bucket_list = _render_buckets(buckets)
     event_list = _render_events(events)
     quick_list = _render_quick_captures(events)

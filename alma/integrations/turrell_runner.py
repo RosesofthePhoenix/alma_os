@@ -40,7 +40,7 @@ class TurrellRunner:
         if not ndjson_resolved.is_absolute():
             ndjson_resolved = (config.ROOT_DIR / ndjson_resolved).resolve()
         mode_file = Path(config.MODE_FILE_PATH).expanduser()
-        script_path = Path(__file__).resolve().parents[2] / "external" / "xq_turrell_room_2d_v5_3_style_modes.py"
+        script_path = Path(__file__).resolve().parents[2] / "external" / "xq_turrell_room_2d_v6_hce.py"
 
         cmd_parts = [
             "python",

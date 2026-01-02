@@ -25,6 +25,10 @@ class SpotifyNowPlayingLogger:
         self._session_id: Optional[str] = None
         self._poll_interval = poll_interval
         self._lock = threading.Lock()
+        self._current_track_session_id: Optional[int] = None
+        self._current_track_id: Optional[str] = None
+        self._current_start_ts: Optional[float] = None
+        self._last_update_ts: float = 0.0
 
     def start(self, session_id: Optional[str]) -> None:
         with self._lock:
@@ -40,11 +44,19 @@ class SpotifyNowPlayingLogger:
         with self._lock:
             if not self._running:
                 return
+            now = time.time()
+            try:
+                self._finalize_current(now)
+            except Exception:
+                pass
             self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=2.0)
         with self._lock:
             self._running = False
+            self._current_track_session_id = None
+            self._current_track_id = None
+            self._current_start_ts = None
 
     def get_latest(self) -> Optional[Dict[str, object]]:
         with self._lock:
@@ -171,6 +183,11 @@ class SpotifyNowPlayingLogger:
                 )
             except Exception:
                 pass
+        try:
+            self._update_track_session(payload, session_id=session_id)
+        except Exception:
+            # Defensive: keep logging alive even if track session update fails
+            pass
 
     def _append_ndjson(self, payload: Dict[str, object]) -> None:
         try:
@@ -210,6 +227,52 @@ class SpotifyNowPlayingLogger:
             return str(data.get("mode", "OFF"))
         except Exception:
             return "OFF"
+
+    def _update_track_session(self, payload: Dict[str, object], session_id: Optional[str]) -> None:
+        track_id = payload.get("track_id")
+        title = payload.get("track_name") or ""
+        artist = payload.get("artists") or ""
+        album = payload.get("album") or ""
+        is_playing = bool(payload.get("is_playing"))
+        now_ts = payload.get("ts") or time.time()
+
+        # End current session if playback stopped or track lost
+        if not is_playing or not track_id:
+            self._finalize_current(now_ts)
+            return
+
+        # Track changed
+        if self._current_track_id and track_id != self._current_track_id:
+            self._finalize_current(now_ts)
+
+        # Start if none
+        if self._current_track_session_id is None:
+            tsid = storage.start_track_session(
+                session_id=session_id,
+                track_id=track_id,
+                title=title,
+                artist=artist,
+                album=album,
+                start_ts=now_ts,
+            )
+            self._current_track_session_id = tsid
+            self._current_track_id = track_id
+            self._current_start_ts = now_ts
+            self._last_update_ts = now_ts
+            return
+
+        # Periodic metric update while playing
+        if now_ts - self._last_update_ts >= 15.0 and self._current_track_session_id:
+            storage.update_track_session_metrics(self._current_track_session_id, end_ts=now_ts)
+            self._last_update_ts = now_ts
+
+    def _finalize_current(self, end_ts: float) -> None:
+        if self._current_track_session_id:
+            storage.update_track_session_metrics(self._current_track_session_id, end_ts=end_ts)
+        self._current_track_session_id = None
+        self._current_track_id = None
+        self._current_start_ts = None
+        self._last_update_ts = 0.0
 
 
 __all__ = ["SpotifyNowPlayingLogger"]

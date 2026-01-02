@@ -114,6 +114,23 @@ def init_db() -> None:
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS track_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                track_id TEXT,
+                title TEXT,
+                artist TEXT,
+                album TEXT,
+                start_ts REAL,
+                end_ts REAL,
+                mean_HCE REAL,
+                mean_Q REAL,
+                mean_X REAL
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS recipes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT,
@@ -519,6 +536,78 @@ def get_latest_spotify(session_id: Optional[str] = None) -> Optional[Dict[str, o
         return rows[0] if rows else None
 
 
+# Track sessions (Spotify)
+def start_track_session(
+    session_id: Optional[str],
+    track_id: str,
+    title: str,
+    artist: str,
+    album: str,
+    start_ts: float,
+) -> int:
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO track_sessions (session_id, track_id, title, artist, album, start_ts)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (session_id, track_id, title, artist, album, start_ts),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def _compute_means_for_window(ts0: float, ts1: float, session_id: Optional[str]) -> Dict[str, float]:
+    buckets = get_buckets_between(ts0, ts1, session_id=session_id)
+    if not buckets:
+        return {"mean_HCE": 0.0, "mean_Q": 0.0, "mean_X": 0.0}
+    mean_HCE = float(np.nanmean([b.get("mean_HCE", 0.0) for b in buckets]))
+    mean_Q = float(np.nanmean([b.get("mean_Q", 0.0) for b in buckets]))
+    mean_X = float(np.nanmean([b.get("mean_X", 0.0) for b in buckets]))
+    return {"mean_HCE": mean_HCE, "mean_Q": mean_Q, "mean_X": mean_X}
+
+
+def update_track_session_metrics(track_session_id: int, end_ts: float) -> None:
+    with _connect() as conn:
+        cur = conn.execute("SELECT start_ts, session_id FROM track_sessions WHERE id=?", (track_session_id,))
+        row = cur.fetchone()
+        if not row:
+            return
+        start_ts, session_id = row
+        means = _compute_means_for_window(start_ts, end_ts, session_id=session_id)
+        conn.execute(
+            """
+            UPDATE track_sessions
+            SET end_ts=?, mean_HCE=?, mean_Q=?, mean_X=?
+            WHERE id=?
+            """,
+            (end_ts, means["mean_HCE"], means["mean_Q"], means["mean_X"], track_session_id),
+        )
+        conn.commit()
+
+
+def list_top_tracks(limit: int = 10, offset: int = 0) -> List[Dict[str, object]]:
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT track_id, title, artist, album,
+                   AVG(mean_HCE) AS avg_hce,
+                   COUNT(*) AS play_count
+            FROM track_sessions
+            WHERE mean_HCE IS NOT NULL
+            GROUP BY track_id, title, artist, album
+            ORDER BY avg_hce DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        )
+        rows = _rows_to_dicts(cur)
+        for r in rows:
+            r["avg_hce"] = float(r.get("avg_hce") or 0.0)
+            r["play_count"] = int(r.get("play_count") or 0)
+        return rows
+
+
 def list_recent_events(limit: int = 20, session_id: Optional[str] = None) -> List[Dict[str, object]]:
     query = """
         SELECT ts, session_id, kind, label, note, tags_json, context_json
@@ -677,6 +766,9 @@ __all__ = [
     "add_schedule_block",
     "update_schedule_block",
     "list_schedule_blocks_for_date",
+    "start_track_session",
+    "update_track_session_metrics",
+    "list_top_tracks",
     "list_recipes",
     "upsert_recipe",
     "delete_recipe",

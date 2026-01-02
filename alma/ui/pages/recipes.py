@@ -239,7 +239,7 @@ def open_modal(new_click, edit_click, cancel_click, recipes):
     prevent_initial_call=True,
 )
 def save_recipe(_n, rid, name, mode, description, target_str, steps_str):
-    if not _n:
+    if not _n or ctx.triggered_id != "recipe-save-btn":
         raise dash.exceptions.PreventUpdate  # type: ignore
     try:
         target_json = json.loads(target_str or "{}")

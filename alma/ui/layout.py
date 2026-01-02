@@ -104,7 +104,7 @@ def _poll_live_metrics(_n):
     X = snap.get("X") or 0.0
     Q = snap.get("Q_vibe_focus") or snap.get("Q_vibe") or 0.0
     HCE = snap.get("HCE") or 0.0
-    text = f"Live: X={X:.3f} | Q={Q:.3f} | HCE={HCE:.1f}"
+    text = f"Live: X={X:.3f} | Q={Q:.3f} | HCE={HCE:.3f}"
     return {"X": X, "Q": Q, "HCE": HCE, "ts": snap.get("ts_unix")}, text
 
 

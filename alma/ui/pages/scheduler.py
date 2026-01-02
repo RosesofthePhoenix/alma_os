@@ -131,12 +131,16 @@ def _suggest_windows(date_val: str) -> List[Dict[str, object]]:
 
 
 def _format_why(s: Dict[str, object]) -> str:
+    why = "Historical mean_HCE high — reflective / synthesis work favored."
+    if s.get("mean_hce", 0) >= 3.0:
+        why = "Transcendent harmony — prioritize insight, synthesis, contemplative work."
+    elif s.get("mean_hce", 0) >= 2.0:
+        why = "Elevated HCE — contemplative flow window."
     return (
         f"Recommended {dt.datetime.fromtimestamp(s['start_ts']).strftime('%H:%M')}–"
         f"{dt.datetime.fromtimestamp(s['end_ts']).strftime('%H:%M')}: "
-        f"Historical mean_HCE {s.get('mean_hce', 0):.2f}, "
-        f"valid_fraction {s.get('valid_fraction', 0):.2f}, std_Q {s.get('std_q', 0):.2f} — "
-        "ideal for harmonious elevation."
+        f"mean_HCE {s.get('mean_hce', 0):.2f}, "
+        f"valid_fraction {s.get('valid_fraction', 0):.2f}, std_Q {s.get('std_q', 0):.2f} — {why}"
     )
 
 

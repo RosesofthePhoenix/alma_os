@@ -146,6 +146,8 @@ class State:
     x_raw: float = 0.0
     q_raw: float = 0.0
     q_origin: str = "-"  # masked|raw|-
+    hce: float = 0.0
+    hce_ema: float = 0.0
 
     # normalized + smoothed values (0..1)
     x: float = 0.0
@@ -461,6 +463,9 @@ class NDJSONFollower:
                 q = None
                 q_origin = "-"
 
+        # HCE (transcendence)
+        hce_val = obj.get("HCE", obj.get("hce"))
+
         # Some pipelines log Q as percent (0-100).
         if q is not None:
             try:
@@ -723,6 +728,18 @@ class NDJSONFollower:
             self.state.q = ema(self.state.q, q_n, aq if dt > 0 else 1.0)
         # else: freeze (hold last good X and/or Q)
 
+        # HCE smoothing (scaled values coming from Cortex; often 0..~50)
+        try:
+            hce_in = locals().get("hce_val")
+            if hce_in is None:
+                hce_in = self.state.hce
+            h_val = float(hce_in)
+            h_val = max(0.0, h_val)
+            self.state.hce = h_val
+            self.state.hce_ema = ema(self.state.hce_ema, h_val, aq if dt > 0 else 1.0)
+        except Exception:
+            pass
+
 
 # ----------------------------- mode file -----------------------------
 
@@ -965,6 +982,7 @@ if HAVE_NUMPY:
             mode: str,
             x: float,
             q: float,
+            hce: float,
             valid_ema: float,
             qc_ema: float,
             t: float,
@@ -979,6 +997,12 @@ if HAVE_NUMPY:
             valid_factor = lerp(0.18, 1.0, clamp01(valid_ema))
             qc_factor = clamp01((qc_ema - 0.35) / 0.55)  # 0 if qc~0.35, 1 if qc~0.90
             gate = lerp(0.35, 1.0, valid_factor * qc_factor)
+
+            # HCE-driven transcendence scale
+            h_norm = clampf(hce / 50.0, 0.0, 1.0)
+            peak = smoothstep(0.25, 1.0, h_norm)
+            gold_portal_boost = 1.0 + 1.8 * peak
+            cosmic_depth = 1.0 + 1.2 * peak
 
             # Style presets: all share OFF palette; only style parameters vary
             style = {
@@ -996,9 +1020,9 @@ if HAVE_NUMPY:
             elif mode == MODE_STABILIZE:
                 style.update({"exp": 1.00, "bloom": 1.00, "bloom_thr": 1.05, "drift": 0.90, "micro": 1.05, "warmth": -0.005})
 
-            exposure_eff = clampf(exposure * style["exp"], 0.60, 1.90)
-            bloom_strength_eff = clampf(bloom_strength * style["bloom"], 0.18, 1.75)
-            bloom_thr_eff = clampf(bloom_thr * style["bloom_thr"], 0.16, 0.85)
+            exposure_eff = clampf(exposure * style["exp"] * (1.0 + 0.5 * peak), 0.60, 2.20)
+            bloom_strength_eff = clampf(bloom_strength * style["bloom"] * (1.0 + 0.8 * peak), 0.18, 2.0)
+            bloom_thr_eff = clampf(bloom_thr * style["bloom_thr"], 0.12, 0.85)
             drift_eff = clampf(drift_speed * style["drift"], 0.35, 1.60)
             micro_eff = clampf(micro_texture_gain * style["micro"], 0.65, 1.30)
             warmth_eff = clampf(warmth_bias + style.get("warmth", 0.0), -0.08, 0.08)
@@ -1006,6 +1030,7 @@ if HAVE_NUMPY:
             return self._render_off(
                 x=x,
                 q=q,
+                hce=h_norm,
                 gate=gate,
                 t=t,
                 exposure=exposure_eff,
@@ -1014,6 +1039,8 @@ if HAVE_NUMPY:
                 drift_speed=drift_eff,
                 micro_texture_gain=micro_eff,
                 warmth_bias=warmth_eff,
+                cosmic_depth=cosmic_depth,
+                gold_boost=gold_portal_boost,
             )
 
         def palette_at(self, t: float) -> np.ndarray:
@@ -1033,7 +1060,7 @@ if HAVE_NUMPY:
             rim = self.palette_at(rim_q)
             return wall, portal, rim
 
-        def _render_off(self, x: float, q: float, gate: float, t: float, exposure: float, bloom_strength: float, bloom_thr: float, drift_speed: float, micro_texture_gain: float, warmth_bias: float) -> np.ndarray:
+        def _render_off(self, x: float, q: float, hce: float, gate: float, t: float, exposure: float, bloom_strength: float, bloom_thr: float, drift_speed: float, micro_texture_gain: float, warmth_bias: float, cosmic_depth: float, gold_boost: float) -> np.ndarray:
             # OFF palette for all modes; gentle motion and clamped brightness to prevent whiteout
             sp = 0.05 * (0.30 + q) * drift_speed  # slow drift
             motion = 0.03 * math.sin(t * 0.25 * drift_speed)
@@ -1055,12 +1082,20 @@ if HAVE_NUMPY:
             halo = np.exp(-(np.maximum(d, 0.0) / (0.22 + 0.08 * q_for_palette)) ** 2)
             rim_mask = np.exp(-(np.abs(d) / 0.010) ** 2)
 
-            base_intensity = (0.35 + 1.10 * q_for_palette) * gate
-            intensity = clampf(base_intensity, 0.10, 1.35)
+            base_intensity = (0.35 + 1.10 * q_for_palette) * gate * cosmic_depth
+            intensity = clampf(base_intensity, 0.10, 1.65)
 
-            lin += portal_mask[..., None] * portal[None, None, :] * (1.85 * intensity)
-            lin += halo[..., None] * portal[None, None, :] * (0.50 * intensity)
-            lin += rim_mask[..., None] * rim[None, None, :] * (2.05 * intensity)
+            lin += portal_mask[..., None] * portal[None, None, :] * (1.85 * intensity * gold_boost)
+            lin += halo[..., None] * portal[None, None, :] * (0.50 * intensity * gold_boost)
+            lin += rim_mask[..., None] * rim[None, None, :] * (2.05 * intensity * gold_boost)
+
+            # HCE cosmic bloom (mandala glow) when elevated
+            if hce > 0.05:
+                r = np.sqrt(self.u ** 2 + self.v ** 2)
+                petals = 0.35 + 0.65 * np.cos(12.0 * (math.pi * r + t * 0.3))
+                bloom = np.exp(-((r * 1.8) ** 2)) * petals * (0.6 + 1.8 * hce)
+                gold = np.array([1.0, 0.82, 0.38], dtype=np.float32)
+                lin += bloom[..., None] * gold[None, None, :] * intensity
 
             # subtle floor cue
             floor = smoothstep(0.10, 1.00, self.v)
@@ -1231,16 +1266,16 @@ def draw_hud(
     if font is None:
         return
 
-    def _render_text(txt: str):
+    def _render_text(txt: str, color=(230, 230, 230)):
         try:
-            surf = font.render(txt, True, (230, 230, 230))
+            surf = font.render(txt, True, color)
             # pygame.freetype returns (surf, rect)
             if isinstance(surf, tuple):
                 surf = surf[0]
             return surf
         except TypeError:
             try:
-                surf, _ = font.render(txt, (230, 230, 230))
+                surf, _ = font.render(txt, color)
                 return surf
             except Exception:
                 return None
@@ -1248,16 +1283,22 @@ def draw_hud(
             return None
 
     st = follower.state
+    hce = getattr(st, "hce", 0.0) or 0.0
+    hce_ema = getattr(st, "hce_ema", 0.0) or 0.0
+    hce_color = (255, 215, 120) if hce_ema >= 20 else (200, 230, 255)
+    hce_glow = hce_ema >= 20
+
     lines = [
         f"mode={mode}    demo={demo}",
         f"valid={st.valid} (visual)  v_ema={st.valid_ema:.2f}  |  stream_valid={st.stream_valid}  s_ema={st.stream_valid_ema:.2f}  qc={st.qc:.2f} qc_ema={st.qc_ema:.2f}",
         f"valid_source={follower.valid_source}  qc_thr={follower.quality_valid_thr:.2f}  grace={follower.valid_grace_sec:.2f}s  freeze={'on' if follower.freeze_on_invalid else 'off'}  |  q_source={follower.q_source} q_metric={follower.q_metric} raw_when_invalid={'on' if follower.raw_when_invalid else 'off'}",
         f"render: preset={getattr(args, 'quality', 'balanced')}  scale={float(getattr(args, 'render_scale', 0.0)):.2f}  bloom_down={int(getattr(args, 'bloom_down', 0))}  blur={int(getattr(args, 'bloom_blur_passes', 0))}",
-        f"Xraw={st.x_raw:.3f}  Qraw={st.q_raw:.3f} (q_src={st.q_origin})  |  Xn={st.x:.3f}  Qn={st.q:.3f}",
+        f"Xraw={st.x_raw:.3f}  Qraw={st.q_raw:.3f} (q_src={st.q_origin})  |  Xn={st.x:.3f}  Qn={st.q:.3f}  HCE={hce:.2f}  HCE_ema={hce_ema:.2f}",
         f"C_pe_n: {(st.c_pe_n if st.option_e_present else float('nan')):.3f}" if st.option_e_present else "C_pe_n: --",
         f"S_n: {(st.s_flat_n if st.option_e_present else float('nan')):.3f}" if st.option_e_present else "S_n: --",
         f"invalid_age={st.invalid_age:.2f}s  reasons={('|'.join(st.reasons) if st.reasons else '-')}",
         f"ranges: X[{follower.x_min:.2f},{follower.x_max:.2f}]  Q[{follower.q_min:.3f},{follower.q_max:.3f}]",
+        f"stream_age: { (time.time() - follower.last_pkt_walltime):.2f}s" if follower.last_pkt_walltime else "stream_age: n/a",
         f"ndjson={ndjson_path}",
         "keys: 1=FOCUS  2=Q  3=STAB  0=OFF  |  F=fullscreen  H=HUD  D=demo  V=Q-source  M=Q-metric  C=valid-source  P=quality  Esc=quit",
     ]
@@ -1268,6 +1309,24 @@ def draw_hud(
         if surf:
             screen.blit(surf, (14, y))
             y += surf.get_height() + 2
+
+    # HCE emphasis (glow) in upper-right
+    try:
+        x = screen.get_width() - 200
+        y0 = 18
+        hce_text = f"HCE {hce_ema:.1f}"
+        base_color = hce_color
+        surf = _render_text(hce_text, color=base_color)
+        if surf:
+            if hce_glow:
+                glow_color = (255, 215, 120)
+                for off in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+                    glow = _render_text(hce_text, color=glow_color)
+                    if glow:
+                        screen.blit(glow, (x + 4 + off[0], y0 + off[1]))
+            screen.blit(surf, (x + 4, y0))
+    except Exception:
+        pass
 
 
 # ----------------------------- main -----------------------------
@@ -1398,9 +1457,7 @@ def main() -> int:
     mode = MODE_OFF
     last_mode_poll = 0.0
 
-    show_hud = bool(args.hud)
-    if font is None:
-        show_hud = False
+    show_hud = True if font else False
     demo = bool(args.demo)
 
     renderer: Optional[TurrellishRenderer] = None
@@ -1426,8 +1483,13 @@ def main() -> int:
                 elif e.key in KEY_TO_MODE:
                     mode = KEY_TO_MODE[e.key]
                     write_mode_file(args.mode_file, mode)
+                    toast_msg = f"mode → {mode}"
+                    toast_until = time.time() + 1.5
+                    pygame.display.set_caption(f"X/Q Turrell Room (2D) — v5  |  {mode}")
                 elif e.key == pygame.K_h:
                     show_hud = not show_hud
+                    toast_msg = "HUD on" if show_hud else "HUD off"
+                    toast_until = time.time() + 1.0
                 elif e.key == pygame.K_d:
                     demo = not demo
                 elif e.key == pygame.K_v:
@@ -1534,6 +1596,7 @@ def main() -> int:
             mode=mode,
             x=float(follower.state.x),
             q=float(q_vis),
+            hce=float(follower.state.hce_ema),
             valid_ema=float(follower.state.valid_ema * (0.25 + 0.75 * (follower.state.qualia_valid_ema if ((follower.q_metric or "auto").strip().lower() in {"vibe", "vibe_focus", "vibe_focus_e", "meaningful", "focus_meaningful"}) else 1.0))),
             qc_ema=float(follower.state.qc_ema),
             t=t,

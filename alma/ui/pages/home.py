@@ -1,5 +1,6 @@
 import json
 import time
+import datetime as dt
 from pathlib import Path
 
 from dash import callback, ctx, dcc, html, Input, Output, State
@@ -65,6 +66,7 @@ status_strip = dbc.Card(
                 _status_item("Baseline", html.Span("N/A", id="home-baseline-text")),
                 _status_item("Current label", html.Span("(coming soon)", id="home-label-text")),
                 _status_item("Now Playing", html.Span("N/A", id="home-now-playing")),
+                _status_item("Peak Track HCE", html.Span("—", id="home-peak-hce")),
             ],
             className="g-3 align-items-center status-row",
         )
@@ -181,6 +183,23 @@ controls_card = dbc.Card(
     className="page-card",
 )
 
+# Top tracks analytics
+top_tracks_card = dbc.Card(
+    [
+        dbc.CardHeader("HCE Top Tracks"),
+        dbc.CardBody(
+            [
+                html.Div("Top 10 HCE Tracks", className="fw-bold mb-2"),
+                html.Div(id="home-top10-tracks"),
+                html.Hr(),
+                html.Div("Top 100 HCE Tracks", className="fw-bold mb-2"),
+                html.Div(id="home-top100-tracks", className="small"),
+            ]
+        ),
+    ],
+    className="page-card",
+)
+
 # Bookmark modal for richer note entry
 bookmark_modal = dbc.Modal(
     [
@@ -191,6 +210,45 @@ bookmark_modal = dbc.Modal(
                 dbc.Input(id="home-bookmark-label", value="moment", placeholder="moment"),
                 dbc.Label("Note", className="mt-2"),
                 dbc.Textarea(id="home-bookmark-note", placeholder="What’s happening right now?"),
+                html.Hr(),
+                dbc.Checklist(
+                    id="home-bookmark-social",
+                    options=[{"label": "With others (unchecked = Alone)", "value": "with"}],
+                    value=[],
+                    switch=True,
+                    className="mt-2",
+                ),
+                dbc.Input(id="home-bookmark-names", placeholder="Names / count (optional)", className="mt-2"),
+                dbc.Label("Activity", className="mt-2"),
+                dcc.Dropdown(
+                    id="home-bookmark-activity",
+                    options=[
+                        {"label": x, "value": x.lower()}
+                        for x in ["Work", "Creative", "Meditation", "Social", "Media", "Exercise"]
+                    ],
+                    value="work",
+                    clearable=False,
+                ),
+                dbc.Label("Mood (1-10)", className="mt-3"),
+                dcc.Slider(id="home-bookmark-mood", min=1, max=10, step=1, value=6, marks=None),
+                dbc.Label("Energy (1-10)", className="mt-3"),
+                dcc.Slider(id="home-bookmark-energy", min=1, max=10, step=1, value=6, marks=None),
+                dbc.Label("Environment", className="mt-3"),
+                dbc.RadioItems(
+                    id="home-bookmark-lighting",
+                    options=[{"label": "Natural", "value": "natural"}, {"label": "Artificial", "value": "artificial"}],
+                    value="natural",
+                    inline=True,
+                ),
+                dbc.RadioItems(
+                    id="home-bookmark-noise",
+                    options=[{"label": "Quiet", "value": "quiet"}, {"label": "Loud", "value": "loud"}],
+                    value="quiet",
+                    inline=True,
+                ),
+                dbc.Input(id="home-bookmark-location", placeholder="Location (optional)", className="mt-2"),
+                dbc.Label("Intention", className="mt-2"),
+                dbc.Textarea(id="home-bookmark-intention", placeholder="Pre-session goal / intention"),
             ]
         ),
         dbc.ModalFooter(
@@ -204,18 +262,26 @@ bookmark_modal = dbc.Modal(
     is_open=False,
 )
 
+optimal_windows_card = dbc.Card(
+    [
+        dbc.CardHeader("Optimal Windows (HCE)"),
+        dbc.CardBody(
+            [
+                html.Div("Today’s top HCE windows", className="fw-bold mb-2"),
+                html.Div(id="home-optimal-windows", className="small"),
+            ]
+        ),
+    ],
+    className="page-card",
+)
+
 layout = dbc.Container(
     [
         status_strip,
         controls_card,
+        optimal_windows_card,
+        top_tracks_card,
         bookmark_modal,
-        dbc.Card(
-            [
-                dbc.CardHeader("Home"),
-                dbc.CardBody(html.P("Placeholder content for Home page.")),
-            ],
-            className="page-card",
-        ),
     ],
     fluid=True,
     className="page-container",
@@ -260,6 +326,15 @@ layout = dbc.Container(
     State("home-event-note", "value"),
     State("home-bookmark-label", "value"),
     State("home-bookmark-note", "value"),
+    State("home-bookmark-social", "value"),
+    State("home-bookmark-names", "value"),
+    State("home-bookmark-activity", "value"),
+    State("home-bookmark-mood", "value"),
+    State("home-bookmark-energy", "value"),
+    State("home-bookmark-lighting", "value"),
+    State("home-bookmark-noise", "value"),
+    State("home-bookmark-location", "value"),
+    State("home-bookmark-intention", "value"),
 )
 def update_home_status(
     _interval,
@@ -278,6 +353,15 @@ def update_home_status(
     event_note,
     modal_label,
     modal_note,
+    social_vals,
+    names,
+    activity,
+    mood,
+    energy,
+    lighting,
+    noise,
+    location,
+    intention,
 ):
     triggered = ctx.triggered_id
     muse_error = ""
@@ -340,7 +424,17 @@ def update_home_status(
                 kind="manual",
                 label=(modal_label or event_label or "moment"),
                 note=(modal_note or event_note or ""),
-                tags_json={"page": "home"},
+                tags_json={
+                    "page": "home",
+                    "social": "with" if ("with" in (social_vals or [])) else "alone",
+                    "names": names or "",
+                    "activity": activity or "",
+                    "mood": mood,
+                    "energy": energy,
+                    "lighting": lighting or "",
+                    "noise": noise or "",
+                    "location": location or "",
+                },
                 context_json={
                     "snapshot": {
                         "X": latest.get("X"),
@@ -350,6 +444,7 @@ def update_home_status(
                     "bucket": {"label": bucket.get("label")} if bucket else {},
                     "mode": _read_mode(),
                     "now_playing": now_play_latest,
+                    "intention": intention or "",
                 },
                 snapshot_json=latest,
             )
@@ -514,4 +609,49 @@ def toggle_bookmark_modal(open_click, save_click, cancel_click, is_open):
     if triggered_id == "home-bookmark-btn":
         return True, "moment", ""
     return is_open, dash.no_update, dash.no_update
+
+
+def _render_top_tracks(rows, limit: int) -> html.Ul:
+    items = []
+    for idx, r in enumerate(rows[:limit], start=1):
+        title = r.get("title") or ""
+        artist = r.get("artist") or ""
+        avg_hce = r.get("avg_hce", 0.0)
+        count = r.get("play_count", 0)
+        items.append(
+            html.Li(
+                f"{idx}. {artist} — {title} | HCE={avg_hce:.2f} | plays={count}",
+                className="small",
+            )
+        )
+    return html.Ul(items) if items else html.Div("No tracks yet.", className="text-muted")
+
+
+@callback(
+    Output("home-top10-tracks", "children"),
+    Output("home-top100-tracks", "children"),
+    Output("home-peak-hce", "children"),
+    Output("home-optimal-windows", "children"),
+    Input("home-status-interval", "n_intervals"),
+)
+def update_top_tracks(_n):
+    rows_100 = storage.list_top_tracks(limit=100)
+    rows_10 = rows_100[:10]
+    top10 = _render_top_tracks(rows_10, 10)
+    top100 = _render_top_tracks(rows_100, 100)
+    peak = f"{rows_100[0].get('avg_hce', 0.0):.2f}" if rows_100 else "—"
+    # Optimal windows from today's buckets
+    today = dt.date.today()
+    ts0 = dt.datetime.combine(today, dt.time.min).timestamp()
+    ts1 = dt.datetime.combine(today, dt.time.max).timestamp()
+    buckets = storage.get_buckets_between(ts0, ts1, session_id=None)
+    buckets = sorted(buckets, key=lambda b: b.get("mean_HCE", 0.0) or 0.0, reverse=True)
+    items = []
+    for b in buckets[:3]:
+        start = b.get("bucket_start_ts")
+        hce = b.get("mean_HCE", 0.0) or 0.0
+        ttxt = dt.datetime.fromtimestamp(start).strftime("%H:%M") if start else "--"
+        items.append(html.Li(f"{ttxt} — HCE {hce:.2f}", className="small"))
+    optimal = html.Ul(items) if items else html.Div("No HCE windows yet.", className="text-muted")
+    return top10, top100, peak, optimal
 

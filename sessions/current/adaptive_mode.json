@@ -1,1 +1,1 @@
-{"mode": "OFF", "recipe_id": 5, "name": "get in the zone test 5", "target_metrics": {"mean_HCE_min": 3}, "steps": ["Breath priming 1m", "Deep focus 6m", "Short movement break"], "launch_turrell": false}
+{"mode": "MAX_Q", "name": "MAX_Q"}
