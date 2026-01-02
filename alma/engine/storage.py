@@ -59,6 +59,20 @@ def init_db() -> None:
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS schedule_blocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT,
+                block_type TEXT,
+                duration_min INTEGER,
+                flexible INTEGER,
+                start_ts REAL,
+                end_ts REAL,
+                created_at REAL DEFAULT (strftime('%s', 'now'))
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS events (
                 ts REAL,
                 session_id TEXT,
@@ -103,10 +117,12 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS recipes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT,
+                description TEXT,
                 mode TEXT,
                 target_json TEXT,
-                steps_md TEXT,
-                stats_json TEXT
+                steps_json TEXT,
+                stats_json TEXT,
+                efficacy_score REAL
             )
             """
         )
@@ -115,12 +131,24 @@ def init_db() -> None:
             cur.execute("ALTER TABLE recipes ADD COLUMN stats_json TEXT")
         except Exception:
             pass
+        try:
+            cur.execute("ALTER TABLE recipes ADD COLUMN description TEXT")
+        except Exception:
+            pass
+        try:
+            cur.execute("ALTER TABLE recipes ADD COLUMN steps_json TEXT")
+        except Exception:
+            pass
+        try:
+            cur.execute("ALTER TABLE recipes ADD COLUMN efficacy_score REAL")
+        except Exception:
+            pass
         conn.commit()
 
 
 def add_schedule_block(title: str, block_type: str, duration_min: int, flexible: bool, start_ts: float, end_ts: float) -> None:
     with _connect() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT INTO schedule_blocks (title, block_type, duration_min, flexible, start_ts, end_ts)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -128,6 +156,7 @@ def add_schedule_block(title: str, block_type: str, duration_min: int, flexible:
             (title, block_type, int(duration_min), 1 if flexible else 0, start_ts, end_ts),
         )
         conn.commit()
+        return int(cur.lastrowid)
 
 
 def list_schedule_blocks_for_date(date_str: str) -> List[Dict[str, object]]:
@@ -135,20 +164,51 @@ def list_schedule_blocks_for_date(date_str: str) -> List[Dict[str, object]]:
     with _connect() as conn:
         cur = conn.execute(
             """
-            SELECT title, block_type, duration_min, flexible, start_ts, end_ts
+            SELECT id, title, block_type, duration_min, flexible, start_ts, end_ts
             FROM schedule_blocks
             WHERE start_ts >= ? AND start_ts < ?
             ORDER BY start_ts ASC
             """,
             (ts0, ts1),
         )
-        return _rows_to_dicts(cur)
+        rows = _rows_to_dicts(cur)
+        for r in rows:
+            r["flexible"] = bool(r.get("flexible"))
+        return rows
+
+
+def update_schedule_block(block_id: int, start_ts: float, end_ts: float, duration_min: Optional[int] = None, title: Optional[str] = None) -> None:
+    """Update timing (and optionally duration/title) for a scheduled block."""
+    if block_id is None:
+        return
+    fields = ["start_ts = ?", "end_ts = ?"]
+    params: List[object] = [start_ts, end_ts]
+    if duration_min is not None:
+        fields.append("duration_min = ?")
+        params.append(int(duration_min))
+    if title is not None:
+        fields.append("title = ?")
+        params.append(title)
+    params.append(block_id)
+    with _connect() as conn:
+        conn.execute(f"UPDATE schedule_blocks SET {', '.join(fields)} WHERE id = ?", params)
+        conn.commit()
 
 
 # Recipes
+def _compute_efficacy_from_stats(stats: Dict[str, object]) -> float:
+    runs = int(stats.get("runs", 0) or 0)
+    successes = int(stats.get("successes", 0) or 0)
+    if runs <= 0:
+        return 0.0
+    return round(successes / runs, 3)
+
+
 def list_recipes() -> List[Dict[str, object]]:
     with _connect() as conn:
-        cur = conn.execute("SELECT id, name, mode, target_json, steps_md, stats_json FROM recipes ORDER BY id DESC")
+        cur = conn.execute(
+            "SELECT id, name, description, mode, target_json, steps_json, stats_json, efficacy_score FROM recipes ORDER BY id DESC"
+        )
         rows = _rows_to_dicts(cur)
         for r in rows:
             try:
@@ -156,24 +216,42 @@ def list_recipes() -> List[Dict[str, object]]:
             except Exception:
                 r["target_json"] = {}
             try:
+                r["steps_json"] = json.loads(r.get("steps_json") or "[]")
+            except Exception:
+                r["steps_json"] = []
+            try:
                 r["stats_json"] = json.loads(r.get("stats_json") or "{}")
             except Exception:
                 r["stats_json"] = {}
+            # Ensure efficacy_score present
+            if r.get("efficacy_score") is None:
+                r["efficacy_score"] = _compute_efficacy_from_stats(r.get("stats_json") or {})
         return rows
 
 
-def upsert_recipe(recipe_id: Optional[int], name: str, mode: str, target_json: dict, steps_md: str) -> int:
+def upsert_recipe(
+    recipe_id: Optional[int],
+    name: str,
+    mode: str,
+    target_json: dict,
+    steps_json: List[str],
+    description: str = "",
+) -> int:
+    steps_payload = json.dumps(steps_json or [])
     with _connect() as conn:
         if recipe_id:
             conn.execute(
-                "UPDATE recipes SET name=?, mode=?, target_json=?, steps_md=? WHERE id=?",
-                (name, mode, json.dumps(target_json or {}), steps_md, recipe_id),
+                "UPDATE recipes SET name=?, description=?, mode=?, target_json=?, steps_json=? WHERE id=?",
+                (name, description, mode, json.dumps(target_json or {}), steps_payload, recipe_id),
             )
             conn.commit()
             return recipe_id
         cur = conn.execute(
-            "INSERT INTO recipes (name, mode, target_json, steps_md, stats_json) VALUES (?, ?, ?, ?, ?)",
-            (name, mode, json.dumps(target_json or {}), steps_md, json.dumps({})),
+            """
+            INSERT INTO recipes (name, description, mode, target_json, steps_json, stats_json, efficacy_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (name, description, mode, json.dumps(target_json or {}), steps_payload, json.dumps({}), None),
         )
         conn.commit()
         return int(cur.lastrowid)
@@ -182,7 +260,7 @@ def upsert_recipe(recipe_id: Optional[int], name: str, mode: str, target_json: d
 def get_recipe_by_id(recipe_id: int) -> Optional[Dict[str, object]]:
     with _connect() as conn:
         cur = conn.execute(
-            "SELECT id, name, mode, target_json, steps_md, stats_json FROM recipes WHERE id=?",
+            "SELECT id, name, description, mode, target_json, steps_json, stats_json, efficacy_score FROM recipes WHERE id=?",
             (recipe_id,),
         )
         rows = _rows_to_dicts(cur)
@@ -194,10 +272,22 @@ def get_recipe_by_id(recipe_id: int) -> Optional[Dict[str, object]]:
         except Exception:
             r["target_json"] = {}
         try:
+            r["steps_json"] = json.loads(r.get("steps_json") or "[]")
+        except Exception:
+            r["steps_json"] = []
+        try:
             r["stats_json"] = json.loads(r.get("stats_json") or "{}")
         except Exception:
             r["stats_json"] = {}
+        if r.get("efficacy_score") is None:
+            r["efficacy_score"] = _compute_efficacy_from_stats(r.get("stats_json") or {})
         return r
+
+
+def delete_recipe(recipe_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM recipes WHERE id=?", (recipe_id,))
+        conn.commit()
 
 
 def start_session(profile_path: str, muse_address: str, lsl_stream_name: Optional[str], ndjson_path: str) -> str:
@@ -493,9 +583,10 @@ def _aggregate_buckets(buckets: List[Dict[str, object]]) -> Optional[Dict[str, f
         return None
     mean_X = float(np.nanmean([b.get("mean_X", 0.0) for b in buckets]))
     mean_Q = float(np.nanmean([b.get("mean_Q", 0.0) for b in buckets]))
+    mean_HCE = float(np.nanmean([b.get("mean_HCE", 0.0) for b in buckets]))
     std_Q = float(np.nanmean([b.get("std_Q", 0.0) for b in buckets]))
     slope = float(np.nanmean([b.get("Q_slope", 0.0) for b in buckets]))
-    return {"mean_X": mean_X, "mean_Q": mean_Q, "std_Q": std_Q, "slope": slope}
+    return {"mean_X": mean_X, "mean_Q": mean_Q, "mean_HCE": mean_HCE, "std_Q": std_Q, "slope": slope}
 
 
 def score_recipe_run(recipe_id: int, end_ts: float) -> None:
@@ -505,10 +596,7 @@ def score_recipe_run(recipe_id: int, end_ts: float) -> None:
         return
     target = recipe.get("target_json") or {}
     defaults = {
-        "mean_X_min": -999,
-        "mean_Q_min": -999,
-        "std_Q_max": 999,
-        "slope_min": -999,
+        "mean_HCE_min": 0.0,
     }
     thresholds = {**defaults, **target}
 
@@ -543,12 +631,10 @@ def score_recipe_run(recipe_id: int, end_ts: float) -> None:
 
     success = False
     if during_feat:
-        success = (
-            during_feat.get("mean_X", -999) >= thresholds["mean_X_min"]
-            and during_feat.get("mean_Q", -999) >= thresholds["mean_Q_min"]
-            and during_feat.get("std_Q", 999) <= thresholds["std_Q_max"]
-            and during_feat.get("slope", -999) >= thresholds["slope_min"]
-        )
+        success = during_feat.get("mean_HCE", 0.0) >= thresholds.get("mean_HCE_min", 0.0)
+    delta_hce = 0.0
+    if during_feat:
+        delta_hce = float(during_feat.get("mean_HCE", 0.0) - thresholds.get("mean_HCE_min", 0.0))
 
     stats = recipe.get("stats_json") or {}
     runs = int(stats.get("runs", 0)) + 1
@@ -561,12 +647,14 @@ def score_recipe_run(recipe_id: int, end_ts: float) -> None:
         "pre": pre_feat,
         "during": during_feat,
         "success": success,
+        "delta_HCE": delta_hce,
     }
+    efficacy_score = _compute_efficacy_from_stats(stats)
 
     with _connect() as conn:
         conn.execute(
-            "UPDATE recipes SET stats_json=? WHERE id=?",
-            (json.dumps(stats), recipe_id),
+            "UPDATE recipes SET stats_json=?, efficacy_score=? WHERE id=?",
+            (json.dumps(stats), efficacy_score, recipe_id),
         )
         conn.commit()
 
@@ -587,9 +675,11 @@ __all__ = [
     "list_recent_events",
     "get_context_for_window",
     "add_schedule_block",
+    "update_schedule_block",
     "list_schedule_blocks_for_date",
     "list_recipes",
     "upsert_recipe",
+    "delete_recipe",
     "get_recipe_by_id",
 ]
 

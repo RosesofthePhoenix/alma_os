@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3 — Scheduler + Recipes MVP, HCE-driven suggestions, fixes
+- Scheduler: day/week timeline with draggable blocks; suggestions rank historical high-HCE hours (mean_HCE>2, valid_fraction, low std_Q); drag persists to SQLite schedule_blocks; Plotly layout fix removes invalid editable flag.
+- Recipes: schema now stores description, steps_json, efficacy_score; CRUD modal with JSON targets/steps; Apply writes adaptive_mode.json (target metrics, steps, recipe id) and can launch Turrell; efficacy updates from bucket HCE vs mean_HCE_min; delete/edit via cards or modal.
+- Memory: fixed Dash callback to use ctx.triggered_id for selection.
+- Stability: initial recipe list renders from storage; newline steps accepted when JSON parsing fails; DB backfill columns for existing recipes.
+
 ## v0.1 — Baseline robustness, v4.2.1 metrics, HCE, Turrell args, UI safety
 - Baseline: deterministic loading (absolute/ROOT/cwd), gamma_ref/bg_ref captured; Start Engine reloads baseline; status exposed to snapshots.
 - Metrics: integrated v4.2.1 compute; X now uses EMA; meta includes metrics_version; raw/masked Qs preserved.

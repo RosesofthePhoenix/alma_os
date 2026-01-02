@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import dash_bootstrap_components as dbc
 import numpy as np
 import plotly.express as px
-from dash import Input, Output, State, callback, dcc, html, MATCH, ALL
+from dash import Input, Output, State, callback, dcc, html, MATCH, ALL, ctx
 
 from alma.engine import storage
 
@@ -71,6 +71,27 @@ layout = dbc.Container(
                                 ),
                             ],
                             className="g-3 mb-3",
+                        ),
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    [
+                                        dbc.Label("Min mean_HCE (scaled)"),
+                                        dbc.Input(id="mem-min-hce", type="number", value=0.0, step=0.1, min=0),
+                                    ],
+                                    md=3,
+                                    sm=12,
+                                ),
+                                dbc.Col(
+                                    [
+                                        dbc.Button("Retrieve similar states", id="mem-sim-btn", color="primary", className="mt-4"),
+                                        dbc.Button("Use latest bucket", id="mem-use-latest", color="secondary", outline=True, size="sm", className="ms-2 mt-4"),
+                                    ],
+                                    md=6,
+                                    sm=12,
+                                ),
+                            ],
+                            className="g-2 mb-3",
                         ),
                         dbc.Row(
                             [
@@ -172,8 +193,9 @@ def _bucket_vector(b: Dict[str, object]) -> Optional[np.ndarray]:
             [
                 float(b.get("mean_X", 0.0)),
                 float(b.get("mean_Q", 0.0)),
+                float(b.get("mean_HCE", 0.0)) * 2.0,  # double weight for transcendence
                 float(b.get("std_Q", 0.0)),
-                float(b.get("Q_slope", 0.0)),
+                float(b.get("valid_fraction", 0.0)),
             ],
             dtype=float,
         )
@@ -233,11 +255,16 @@ def load_memory(start_date, end_date, label_filter):
 @callback(
     Output("mem-selected-bucket", "data"),
     Input({"type": "mem-bucket-btn", "index": ALL}, "n_clicks"),
+    Input("mem-use-latest", "n_clicks"),
     State("mem-buckets-store", "data"),
     prevent_initial_call=True,
 )
-def select_bucket(btns, buckets):
-    if not buckets or not btns:
+def select_bucket(btns, use_latest, buckets):
+    if not buckets:
+        return None
+    if ctx.triggered_id == "mem-use-latest":
+        return buckets[-1]
+    if not btns:
         return None
     for i, n in enumerate(btns):
         if n:
@@ -247,18 +274,25 @@ def select_bucket(btns, buckets):
 
 @callback(
     Output("mem-similar-list", "children"),
-    Input("mem-selected-bucket", "data"),
+    Input("mem-sim-btn", "n_clicks"),
+    State("mem-selected-bucket", "data"),
     State("mem-buckets-store", "data"),
     State("mem-label-filter", "value"),
+    State("mem-min-hce", "value"),
+    prevent_initial_call=True,
 )
-def show_similar(selected_bucket, buckets, label_filter):
-    if not selected_bucket or not buckets:
-        return "Select a bucket to see similar states."
+def show_similar(_n, selected_bucket, buckets, label_filter, min_hce):
+    if not buckets:
+        return "No buckets to compare."
+    if not selected_bucket:
+        selected_bucket = buckets[-1]
 
     # Filter candidate set
     cands = buckets
     if label_filter and label_filter != "ALL":
         cands = [b for b in buckets if b.get("label") == label_filter]
+    if min_hce is not None:
+        cands = [b for b in cands if (b.get("mean_HCE") or 0) >= float(min_hce)]
     # Build matrix
     vecs = []
     keep = []
@@ -296,6 +330,7 @@ def show_similar(selected_bucket, buckets, label_filter):
         tracks = _top_tracks(start or 0, end or 0, session_id=b.get("session_id")) if start and end else []
         tracks_txt = ", ".join(tracks) if tracks else "—"
         ts_txt = f"{dt.datetime.fromtimestamp(start).strftime('%H:%M')}–{dt.datetime.fromtimestamp(end).strftime('%H:%M')}" if start and end else ""
+        hce_val = b.get("mean_HCE", 0.0) or 0.0
         items.append(
             dbc.Card(
                 dbc.CardBody(
@@ -303,6 +338,7 @@ def show_similar(selected_bucket, buckets, label_filter):
                         html.Div(f"{ts_txt} | {label}", className="fw-bold"),
                         html.Div(f"Similarity: {score:.3f}", className="text-muted"),
                         html.Div(note),
+                        html.Div(f"mean_HCE (scaled): {hce_val:.3f}", className="small"),
                         html.Div(f"Tracks during window: {tracks_txt}", className="mt-1 small"),
                     ]
                 ),
