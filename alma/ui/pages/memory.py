@@ -206,6 +206,11 @@ def _render_quick_captures(events: List[Dict[str, object]]) -> List[html.Div]:
         media = ctx_json.get("media") or ""
         track = ctx_json.get("track") or ""
         note = e.get("note") or ""
+        activity = ctx_json.get("activity") or ""
+        social = ctx_json.get("social") or ""
+        social_count = ctx_json.get("social_count")
+        mood = ctx_json.get("mood")
+        ai_use = ctx_json.get("ai") or ""
         rows.append(
             dbc.Card(
                 dbc.CardBody(
@@ -213,6 +218,13 @@ def _render_quick_captures(events: List[Dict[str, object]]) -> List[html.Div]:
                         html.Div(f"{ts_txt} — {note}", className="fw-bold"),
                         html.Div(f"Window: {window_min} min" if window_min else "Window: —", className="small"),
                         html.Div(f"HCE={mean_hce:.2f} | Q={mean_q:.3f} | X={mean_x:.3f}", className="small text-muted"),
+                        html.Div(f"Activity: {activity}" if activity else "", className="small"),
+                        html.Div(
+                            f"Social: {social} ({social_count})" if social and social_count is not None else (f"Social: {social}" if social else ""),
+                            className="small",
+                        ),
+                        html.Div(f"Mood: {mood}" if mood else "", className="small"),
+                        html.Div(f"AI: {ai_use}" if ai_use else "", className="small text-muted"),
                         html.Div(f"Media/Person: {media}" if media else "", className="small"),
                         html.Div(f"Track: {track}" if track else "", className="small text-muted"),
                     ]

@@ -9,6 +9,27 @@ from dash import Input, Output, State, callback, dcc, html
 from alma import config
 
 
+def _fetch_recent_buckets(days: int = 7) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    try:
+        end_ts = dt.datetime.now().timestamp()
+        start_ts = end_ts - days * 86400
+        with sqlite3.connect(config.DB_PATH) as conn:
+            cur = conn.execute(
+                """
+                SELECT bucket_start_ts, mean_HCE
+                FROM buckets
+                WHERE bucket_start_ts >= ? AND bucket_start_ts <= ?
+                """,
+                (start_ts, end_ts),
+            )
+            for r in cur.fetchall():
+                rows.append({"bucket_start_ts": r[0], "mean_HCE": r[1]})
+    except Exception:
+        return []
+    return rows
+
+
 LABEL_COLORS = {
     "DEEP_WORK": "#4caf50",
     "ELEVATION": "#7c4dff",
@@ -247,6 +268,7 @@ layout = dbc.Container(
                                             display_format="YYYY-MM-DD",
                                         ),
                                         html.Div(id="readiness-count-text", className="text-info small mt-2"),
+                                        html.Div(id="readiness-forecast-text", className="text-warning small mt-1"),
                                     ],
                                     md=4,
                                     sm=12,
@@ -282,6 +304,7 @@ layout = dbc.Container(
     Output("readiness-timeline", "figure"),
     Output("readiness-today-stripe", "figure"),
     Output("readiness-count-text", "children"),
+    Output("readiness-forecast-text", "children"),
     Input("readiness-date", "date"),
 )
 def load_buckets(date_val):
@@ -294,7 +317,23 @@ def load_buckets(date_val):
     timeline = _make_timeline(buckets, title="Readiness Map")
     stripe = _make_today_stripe(buckets)
     count_text = f"Buckets fetched: {len(buckets)}"
-    return buckets, timeline, stripe, count_text
+    # Forecast from recent history (last 7 days)
+    forecast = ""
+    hist = _fetch_recent_buckets(days=7)
+    if hist:
+        hours = {}
+        for b in hist:
+            ts = b.get("bucket_start_ts")
+            if not ts:
+                continue
+            hour = dt.datetime.fromtimestamp(ts).hour
+            hours.setdefault(hour, []).append(float(b.get("mean_HCE") or 0.0))
+        if hours:
+            hour_avg = [(h, sum(v) / len(v)) for h, v in hours.items()]
+            hour_avg.sort(key=lambda x: x[1], reverse=True)
+            top_hour, top_val = hour_avg[0]
+            forecast = f"Peak harmony likely around {top_hour:02d}:00 — mean_HCE~{top_val:.2f}"
+    return buckets, timeline, stripe, count_text, forecast
 
 
 @callback(

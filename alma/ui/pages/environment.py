@@ -19,6 +19,17 @@ def _load_profile():
         return {}
 
 
+def _save_profile(data):
+    try:
+        with PROFILE_PATH.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+DISPLAY_DEFAULT = (_load_profile().get("turrell_display") or 0) if PROFILE_PATH.exists() else 0
+
+
 layout = dbc.Container(
     [
         dbc.Card(
@@ -30,14 +41,14 @@ layout = dbc.Container(
                             [
                                 dbc.Col(
                                     [
-                                        dbc.Label("Display (0 = laptop, 1 = extended)"),
+                                        dbc.Label("Turrell Display"),
                                         dcc.Dropdown(
                                             id="env-display",
                                             options=[
-                                                {"label": "0 (laptop)", "value": 0},
-                                                {"label": "1 (extended)", "value": 1},
+                                                {"label": "Primary (MacBook)", "value": 0},
+                                                {"label": "External TV", "value": 1},
                                             ],
-                                            value=0,
+                                            value=DISPLAY_DEFAULT,
                                             clearable=False,
                                         ),
                                     ],
@@ -134,6 +145,11 @@ def handle_turrell(_n, start_clicks, stop_clicks, enable_ndjson_clicks, display,
         else:
             profile = _load_profile()
             ndjson_path = profile.get("ndjson_state_path", str(config.STATE_STREAM_PATH))
+            try:
+                profile["turrell_display"] = int(display or 0)
+                _save_profile(profile)
+            except Exception:
+                pass
             runner.start(display=display or 0, fullscreen=fullscreen, ndjson_path=ndjson_path)
     elif triggered == "env-stop-turrell":
         runner.stop()

@@ -8,5 +8,8 @@
   "SPOTIPY_CLIENT_SECRET": "3824c0f9c00b495fb647f7b0d05be7cd",
   "SPOTIPY_REDIRECT_URI": "http://127.0.0.1:8888/callback",
   "SPOTIFY_PREFERRED_DEVICE": "iPhone",
-  "baseline_path": "baselines/baseline_global_muse_v1_revised.json"
+  "baseline_path": "baselines/baseline_global_muse_v1_revised.json",
+  "turrell_display": 0,
+  "AUTO_ADAPT_STRESS": true,
+  "SOOTHING_SOURCE": "https://open.spotify.com/playlist/2GvC1X54C1gfY2VSVrhiMi?si=1393e5110dc44503"
 }

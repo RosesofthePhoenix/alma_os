@@ -100,6 +100,20 @@ layout = dbc.Container(
                                     md=4,
                                     sm=12,
                                 ),
+                                dbc.Col(
+                                    [
+                                        dbc.Label("Stress adaptive playback"),
+                                        dbc.Checklist(
+                                            id="settings-auto-adapt",
+                                            options=[{"label": "Auto-adapt on stress", "value": "auto"}],
+                                            value=[],
+                                            switch=True,
+                                        ),
+                                        dbc.Input(id="settings-soothing-source", placeholder="Soothing playlist/artist", size="sm", className="mt-1"),
+                                    ],
+                                    md=4,
+                                    sm=12,
+                                ),
                             ],
                             className="g-3 mb-3",
                         ),
@@ -125,7 +139,7 @@ layout = dbc.Container(
                             ],
                             className="g-3 mb-3",
                         ),
-                        dcc.Store(id="settings-profile-store"),
+                        dcc.Store(id="settings-profile-store", data=_load_profile()),
                         dcc.Interval(id="settings-load-interval", interval=1000, max_intervals=1),
                     ]
                 ),
@@ -147,6 +161,8 @@ layout = dbc.Container(
     Output("settings-spotify-secret", "value"),
     Output("settings-spotify-redirect", "value"),
     Output("settings-spotify-device", "value"),
+    Output("settings-auto-adapt", "value"),
+    Output("settings-soothing-source", "value"),
     Input("settings-load-interval", "n_intervals"),
 )
 def load_profile(_):
@@ -160,6 +176,8 @@ def load_profile(_):
         _get_field(profile, "SPOTIPY_CLIENT_SECRET", ""),
         _get_field(profile, "SPOTIPY_REDIRECT_URI", ""),
         _get_field(profile, "SPOTIFY_PREFERRED_DEVICE", ""),
+        ["auto"] if profile.get("AUTO_ADAPT_STRESS") else [],
+        _get_field(profile, "SOOTHING_SOURCE", ""),
     )
 
 
@@ -174,9 +192,11 @@ def load_profile(_):
     State("settings-spotify-secret", "value"),
     State("settings-spotify-redirect", "value"),
     State("settings-spotify-device", "value"),
+    State("settings-auto-adapt", "value"),
+    State("settings-soothing-source", "value"),
     prevent_initial_call=True,
 )
-def save_profile(n_clicks, profile_data, muse_address, ndjson_path, preferred_name, cid, secret, redirect_uri, device):
+def save_profile(n_clicks, profile_data, muse_address, ndjson_path, preferred_name, cid, secret, redirect_uri, device, auto_adapt, soothing_source):
     profile = profile_data or {}
     profile["muse_address"] = muse_address or ""
     profile["ndjson_state_path"] = ndjson_path or ""
@@ -189,6 +209,8 @@ def save_profile(n_clicks, profile_data, muse_address, ndjson_path, preferred_na
         profile["SPOTIPY_REDIRECT_URI"] = redirect_uri
     if device is not None:
         profile["SPOTIFY_PREFERRED_DEVICE"] = device
+    profile["AUTO_ADAPT_STRESS"] = bool(auto_adapt and "auto" in auto_adapt)
+    profile["SOOTHING_SOURCE"] = soothing_source or ""
     ok, err = _save_profile(profile)
     if ok:
         return "Saved."

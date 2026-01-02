@@ -15,8 +15,10 @@ python app.py
 ```
 If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
 
-## Key features (Phase 2/3/4)
-- Live metrics + HCE: v4.2.1 metrics, EMA for X, HCE (super-linear, scaled) carried through snapshots/NDJSON/buckets. Top bar shows NDJSON status and live `X/Q/HCE` (3 decimals).
+## Key features (Phase 2/3/4/5)
+- Live metrics + HCE: v4.2.1 metrics, EMA for X, HCE (super-linear, scaled) carried through snapshots/NDJSON/buckets. Top bar shows NDJSON status and live `X/Q/HCE` (3 decimals); NDJSON defaults to ON.
+- Predictive guidance: readiness shows “Peak harmony likely HH:00” forecast from recent buckets; global banners for flow/ideation/transcendent and stress patterns.
+- Stress awareness + settings: heuristic on X/std_Q/HCE ratio, validity, Q_slope; Settings add “Auto-adapt on stress” toggle and soothing source.
 - Baseline robustness: loads `baselines/baseline_global_muse_v1_revised.json` with fallbacks; status logged on engine init.
 - Persistence (SQLite `data/alma.db`):
   - Samples → buckets (mean_X/mean_Q/mean_HCE/std_Q/Q_slope/valid_fraction)
@@ -28,13 +30,13 @@ If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
 - Pages:
   - Home: status, HCE/optimal windows, peak track HCE, NDJSON toggle, bookmark modal.
   - Neurometrics: HCE raw + rolling z-score.
-  - Readiness: HCE-aware labels (TRANSCENDENT_SYNTHESIS, CONTEMPLATIVE_FLOW, etc.), timeline/stripe, “Why” panel.
+  - Readiness: HCE-aware labels (TRANSCENDENT_SYNTHESIS, CONTEMPLATIVE_FLOW, etc.), timeline/stripe, “Why” panel, forecast line for peak harmony.
   - Scheduler: draggable blocks + HCE-driven suggestions.
   - Recipes: CRUD, apply writes `sessions/current/adaptive_mode.json` (optionally launch Turrell).
   - Memory: similarity search with HCE weighting; quick captures list; TRANSCENDENT filter.
-  - Spotify Resonance: visuals first (HCE histogram, top artists by HCE, bar/scatter, timeline, correlation heatmap, findings), Top 20 table at bottom; backfills missing means.
+  - Spotify Resonance: visuals first (HCE histogram, top artists by HCE, bar/scatter, timeline, correlation heatmap, findings), Top 20 table at bottom; backfills missing means; suggested next track banner.
 - Turrell Room:
-  - Runner launches `external/xq_turrell_room_2d_v6_hce.py` (HCE-enhanced); HUD/text fallback (SysFont→freetype→pixel), hotkeys logged (H, 0–3, F, ESC double-press), display retry, NDJSON follower tolerant to truncation.
+  - Runner launches `external/xq_turrell_room_2d_v6_hce.py` (HCE-enhanced); HUD/text fallback (SysFont→freetype→pixel), hotkeys logged (H, 0–3, F, ESC double-press), display retry, NDJSON follower tolerant to truncation; display selection (Primary/External) persisted.
   - v5_3 style script kept for reference; v6 is the active target.
 
 ## Paths and runtime files

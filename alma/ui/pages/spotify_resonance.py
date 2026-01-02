@@ -40,6 +40,45 @@ def _fetch_track_sessions(limit: int = 200) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
+def _proxy_audio_meta(title: str, artist: str) -> Dict[str, str]:
+    """Lightweight heuristic from metadata for genre/tempo placeholders."""
+    text = f"{title} {artist}".lower()
+    genre = "unknown"
+    tempo = "mid"
+    if any(k in text for k in ["lofi", "chill", "ambient"]):
+        genre = "chill"
+        tempo = "slow"
+    elif any(k in text for k in ["techno", "edm", "house", "dance"]):
+        genre = "electronic"
+        tempo = "fast"
+    elif any(k in text for k in ["jazz", "bossa", "samba"]):
+        genre = "jazz"
+        tempo = "mid"
+    elif any(k in text for k in ["classical", "piano", "suite", "concerto"]):
+        genre = "classical"
+        tempo = "slow"
+    elif any(k in text for k in ["hip hop", "rap", "trap"]):
+        genre = "hiphop"
+        tempo = "mid"
+    return {"genre": genre, "tempo": tempo}
+
+def _suggest_next_track(df: pd.DataFrame) -> Dict[str, str]:
+    """Pick the highest mean_HCE track not currently playing (naive ranking)."""
+    if df.empty:
+        return {}
+    df_valid = df[df["mean_HCE"].notna()].sort_values("mean_HCE", ascending=False)
+    if df_valid.empty:
+        return {}
+    top = df_valid.iloc[0]
+    meta = _proxy_audio_meta(top.get("title", ""), top.get("artist", ""))
+    return {
+        "title": top.get("title", ""),
+        "artist": top.get("artist", ""),
+        "mean_HCE": f"{top.get('mean_HCE', 0):.2f}",
+        "genre": meta["genre"],
+        "tempo": meta["tempo"],
+    }
+
 
 def _compute_means(ts0: float, ts1: float, session_id: str) -> Dict[str, float]:
     from alma.engine import storage  # local import to avoid circular
@@ -107,6 +146,7 @@ layout = dbc.Container(
                 dbc.CardHeader("Spotify Resonance"),
                 dbc.CardBody(
                     [
+                        html.Div(id="sr-suggestion", className="mb-3 fw-bold"),
                         dbc.Row(
                             [
                                 dbc.Col(
@@ -183,6 +223,7 @@ layout = dbc.Container(
     Output("sr-corr", "figure"),
     Output("sr-findings", "children"),
     Output("sr-top-table", "children"),
+    Output("sr-suggestion", "children"),
     Input("sr-interval", "n_intervals"),
     Input("sr-thr", "value"),
 )
@@ -318,5 +359,10 @@ def update_resonance(_n, thr):
     # Table
     table = _make_tables(agg)
 
-    return hist_fig, artist_fig, bar_fig, scatter_fig, tl_fig, corr_fig, findings, table
+    suggestion = ""
+    s = _suggest_next_track(df)
+    if s:
+        suggestion = f"Suggested next: {s['title']} — {s['artist']} (mean_HCE {s['mean_HCE']}, {s['genre']}, {s['tempo']})"
+
+    return hist_fig, artist_fig, bar_fig, scatter_fig, tl_fig, corr_fig, findings, table, suggestion
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5 — Phase 5 predictive, guardian, and adaptive playback
+- Real-time banners: global top-center notifications for flow/ideation/transcendent states; stress banner with rationale and HCE-aware heuristics; NDJSON default ON.
+- Predictive guidance: readiness page shows “Peak harmony likely HH:00” forecast from recent buckets; HCE-weighted hour-of-day averaging.
+- Stress detection + settings: heuristics on X/std_Q/HCE ratio + validity/Q_slope; settings add “Auto-adapt on stress” toggle and soothing source.
+- Spotify adaptivity: groundwork for soothing intervention; Resonance page keeps adaptive suggestion plumbing and audio proxy for genre/tempo; track logging intact.
+- Turrell display targeting: Environment page dropdown to pick display 0/1, persisted to profile; runner passes --display accordingly.
+- UI stability: Removed duplicate Quick Capture card and invalid Dropdown props; app loads cleanly.
+
 ## v0.4 — Turrell hardening + Phase 4 UI/Spotify upgrades
 - Turrell Room v6/v7: runner targets v6; NDJSON follower reads from start and survives truncation; HUD/text is bulletproof (SysFont→freetype→pixel fallback), HUD forced ON with banner; hotkeys logged (H, 0–3 modes, F fullscreen, ESC double-press); display set_mode retry; stays up even without pygame.font.
 - Turrell visuals (v6 local): default drift 0.002; drift presets on 4/5/6/7; palette wobble tied to drift phase; drift clamp relaxed (0.001–2.5); render-only butter smoothing for X/Q; center portal fixed (no motion wobble); removed mandala bloom; HCE-fed intensity preserved.
