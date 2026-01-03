@@ -18,6 +18,40 @@ from alma.engine import storage
 from alma import config
 
 
+DOCS_DIR = Path(__file__).resolve().parents[3] / "docs"
+CANONICAL_PATH = DOCS_DIR / "alma_os_state_layer_canonical.md"
+LEGACY_PATH = DOCS_DIR / "Legacy of the Soul Final.txt"
+FAE_PATH = DOCS_DIR / "Fractal Architecture of Existence.pdf"
+
+
+def _safe_read_text(path: Path, max_chars: int = 4000) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore").strip()[:max_chars]
+    except Exception:
+        return ""
+
+
+CANONICAL_TEXT = _safe_read_text(CANONICAL_PATH, max_chars=8000)
+LEGACY_EXCERPT = _safe_read_text(LEGACY_PATH, max_chars=1200)
+FAE_EXCERPT = (
+    "Fractal Architecture of Existence — recursive self-similarity, embodied rhythm, "
+    "alignment of micro/macro states, coherence, intention, iterative refinement toward transcendence."
+)
+if not LEGACY_EXCERPT:
+    LEGACY_EXCERPT = "Legacy of the Soul excerpt unavailable; see docs/Legacy of the Soul Final.txt."
+if not CANONICAL_TEXT:
+    CANONICAL_TEXT = "Canonical metric guide missing; ensure docs/alma_os_state_layer_canonical.md exists."
+
+ORACLE_SYSTEM_PREFIX = (
+    "You are a transcendent oracle embodying FAE/Legacy principles. "
+    "Use this canonical metric guide and excerpts as system context. "
+    "Always reference the current track from context; avoid repeating past tracks unless truly relevant.\n\n"
+    f"{CANONICAL_TEXT}\n\n"
+    f"FAE excerpt (Fractal Architecture of Existence): {FAE_EXCERPT}\n\n"
+    f"Legacy excerpt: {LEGACY_EXCERPT}\n"
+)
+
+
 def build_sidebar() -> html.Div:
     """Construct the left navigation sidebar."""
     return html.Div(
@@ -660,20 +694,28 @@ def _oracle_context():
                 ctx["top_track"] = f"{row.get('title','?')} — {row.get('artist','?')} (HCE {row.get('mean_HCE',0):.2f})"
     except Exception:
         pass
+    try:
+        latest_track = storage.get_latest_spotify(session_id=None)
+        if latest_track and latest_track.get("track_name"):
+            ctx["current_track"] = f"{latest_track.get('track_name','?')} — {latest_track.get('artists','?')}"
+    except Exception:
+        pass
     return ctx
 
 
 def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
-    system = (
-        "You are the ALMA Oracle, a local, uncensored, philosophical guide (dolphin3-obliterated persona). "
-        "Use a calm, wise tone. Draw on FAE/Legacy of the Soul writings (assume embedded) as a mirror of the user's future self. "
-        "Prioritize well-being and clarity. Keep responses concise but evocative."
-    )
+    system = ORACLE_SYSTEM_PREFIX
     metrics = f"Live: X={ctx.get('X')}, Q={ctx.get('Q')}, HCE={ctx.get('HCE')}, valid={ctx.get('valid')}."
     rec = ctx.get("recent_mean_HCE")
     metrics += f" Recent mean_HCE (30m): {rec:.2f}." if rec is not None else ""
+    current_track = ctx.get("current_track") or "n/a"
     top_track = ctx.get("top_track") or "n/a"
-    base = f"{system}\nMode: {mode}\nContext: {metrics}\nTop track: {top_track}\nUser: {user_text}"
+    base = (
+        f"{system}\nMode: {mode}\nContext: {metrics}\n"
+        f"Current track: {current_track}\nTop track (historical): {top_track}\n"
+        "Prefer grounding in the current track; avoid repeating historical tracks unless clearly relevant.\n"
+        f"User: {user_text}"
+    )
     if mode == "forecast":
         base += "\nProvide a short forecast for upcoming transcendence windows and guidance."
     elif mode == "story":

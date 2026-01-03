@@ -36,7 +36,7 @@ If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
   - Memory: similarity search with HCE weighting; quick captures list; TRANSCENDENT filter.
   - Spotify Resonance: visuals first (HCE histogram, top artists by HCE, bar/scatter, timeline, correlation heatmap, findings), Top 20 table at bottom; backfills missing means; suggested next track banner; relax-inducing tracks section.
   - Longitudinal Insights: media alchemy (HCE lift), circadian map, social vs solitary harmony, intention-outcome loops, “state story” generator with data-art scatter.
-  - Oracle (Phase 7): collapsible right sidebar using local Ollama (`huihui_ai/dolphin3-abliterated`) for state-aware guidance and narratives; 60s timeout + retry/backoff.
+  - Oracle (Phase 7): collapsible right sidebar using local Ollama (`huihui_ai/dolphin3-abliterated`) for state-aware guidance and narratives; 60s timeout + retry/backoff; system prompt preloads the canonical metric guide (`docs/alma_os_state_layer_canonical.md`) and Legacy/FAE excerpts; prefers current-track context and avoids repeating historical tracks unless relevant.
 - Turrell Room:
   - Runner launches `external/xq_turrell_room_2d_v6_hce.py` (HCE-enhanced); HUD/text fallback (SysFont→freetype→pixel), hotkeys logged (H, 0–3, F, ESC double-press), display retry, NDJSON follower tolerant to truncation; display selection (Primary/External) persisted.
   - v5_3 style script kept for reference; v6 is the active target.
@@ -63,3 +63,4 @@ Start from Environment page (NDJSON must be ON). Runner passes ndjson/mode paths
 - Font errors in Turrell: v6 falls back to freetype/pixel text; HUD remains visible even without pygame.font.
 - NDJSON empty: ensure engine running and `sessions/current/state_stream.ndjson` being written. ***!
 - Oracle unreachable: ensure `ollama serve` is running and model is pulled; `curl -s http://localhost:11434/api/tags` should respond.
+- Oracle context files: keep `docs/alma_os_state_layer_canonical.md` and `docs/Legacy of the Soul Final.txt` present for best answers (FAE PDF summarized inline).

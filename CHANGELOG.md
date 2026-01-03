@@ -4,6 +4,7 @@
 - Oracle sidebar: collapsible right panel powered by local Ollama (`huihui_ai/dolphin3-abliterated`) for state/history-aware guidance, narratives, and chat; pulls live metrics + top track context.
 - Robust LLM calls: 60s timeout with 3-attempt exponential backoff (5/10/20s) and graceful fallback logging to avoid UI hangs when Ollama is slow or offline.
 - UI integration: Oracle toggle, mode selector, history view, and send box added to the main layout; NDJSON/live metrics remain unchanged.
+- Canonical context: Oracle system prompt now loads `docs/alma_os_state_layer_canonical.md` plus Legacy excerpt and FAE summary; prefers current track context and avoids repeating historical tracks unless relevant.
 
 ## v0.6 — Phase 6 insights, relaxation, and transcendence forecasting
 - Relaxation intelligence: Relax-inducing tracks section (Spotify Resonance) using std_Q<0.1, X 1.6–1.8, low HCE spikes; consistency bar + table.
