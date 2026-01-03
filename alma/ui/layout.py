@@ -3,6 +3,8 @@ import json
 import sqlite3
 import datetime as dt
 from pathlib import Path
+from typing import Dict
+import requests
 
 import dash
 import dash_bootstrap_components as dbc
@@ -42,6 +44,8 @@ def build_layout() -> dbc.Container:
             dcc.Store(id="notif-store"),
             dcc.Store(id="stress-store"),
             dcc.Store(id="relax-store"),
+            dcc.Store(id="oracle-open", data=False),
+            dcc.Store(id="oracle-history", data=[]),
             html.Div(
                 id="notif-banner",
                 className="text-center fw-bold",
@@ -61,6 +65,58 @@ def build_layout() -> dbc.Container:
                 id="transcend-banner",
                 className="text-center fw-bold",
                 style={"display": "none", "marginBottom": "8px"},
+            ),
+            dbc.Button(
+                "Oracle",
+                id="oracle-toggle",
+                color="warning",
+                size="sm",
+                className="position-fixed",
+                style={"right": "12px", "top": "12px", "zIndex": 1200},
+            ),
+            html.Div(
+                id="oracle-panel",
+                style={
+                    "display": "none",
+                    "position": "fixed",
+                    "top": "50px",
+                    "right": "0",
+                    "width": "360px",
+                    "height": "90vh",
+                    "background": "#0b0b12",
+                    "color": "#e8e6ff",
+                    "borderLeft": "1px solid #444",
+                    "boxShadow": "-2px 0 8px rgba(0,0,0,0.5)",
+                    "padding": "10px",
+                    "zIndex": 1100,
+                    "overflowY": "auto",
+                },
+                children=[
+                    dbc.Button("✕", id="oracle-close", size="sm", color="secondary", className="float-end"),
+                    html.Div("Oracle (dolphin3)", className="fw-bold mb-2", style={"color": "#ffd700"}),
+                    dcc.Dropdown(
+                        id="oracle-mode",
+                        options=[
+                            {"label": "Interpret State", "value": "interpret"},
+                            {"label": "Forecast", "value": "forecast"},
+                            {"label": "State Story", "value": "story"},
+                            {"label": "Well-Being", "value": "wellbeing"},
+                            {"label": "Philosophical Mirror", "value": "mirror"},
+                            {"label": "Fractal Narrative", "value": "fractal"},
+                        ],
+                        value="interpret",
+                        clearable=False,
+                        style={"color": "#000"},
+                    ),
+                    html.Div(id="oracle-history-view", className="mt-2", style={"maxHeight": "50vh", "overflowY": "auto"}),
+                    dcc.Textarea(
+                        id="oracle-input",
+                        placeholder="Ask the Oracle...",
+                        style={"width": "100%", "height": "80px", "marginTop": "8px"},
+                    ),
+                    dbc.Button("Send", id="oracle-send", color="primary", size="sm", className="mt-2"),
+                    html.Div(id="oracle-status", className="small text-muted mt-1"),
+                ],
             ),
             html.Div(
                 id="ndjson-indicator",
@@ -543,6 +599,153 @@ def _transcend_watch(_n):
         "opacity": 0.94,
     }
     return text, style
+
+
+@callback(
+    Output("oracle-open", "data"),
+    Output("oracle-panel", "style"),
+    Input("oracle-toggle", "n_clicks"),
+    Input("oracle-close", "n_clicks"),
+    State("oracle-open", "data"),
+    prevent_initial_call=True,
+)
+def toggle_oracle(open_click, close_click, is_open):
+    triggered = dash.callback_context.triggered[0]["prop_id"].split(".")[0] if dash.callback_context.triggered else None
+    if triggered == "oracle-toggle":
+        is_open = not bool(is_open)
+    elif triggered == "oracle-close":
+        is_open = False
+    style = {
+        "display": "block" if is_open else "none",
+        "position": "fixed",
+        "top": "50px",
+        "right": "0",
+        "width": "360px",
+        "height": "90vh",
+        "background": "#0b0b12",
+        "color": "#e8e6ff",
+        "borderLeft": "1px solid #444",
+        "boxShadow": "-2px 0 8px rgba(0,0,0,0.5)",
+        "padding": "10px",
+        "zIndex": 1100,
+        "overflowY": "auto",
+    }
+    return is_open, style
+
+
+def _oracle_context():
+    status = registry.state_engine.get_status()
+    snap = status.get("latest_snapshot") or {}
+    ctx = {
+        "X": snap.get("X"),
+        "Q": snap.get("Q_vibe_focus") or snap.get("Q_vibe"),
+        "HCE": snap.get("HCE"),
+        "valid": (snap.get("reliability") or {}).get("valid"),
+        "ts": snap.get("ts_unix"),
+    }
+    now = time.time()
+    buckets = storage.get_buckets_between(now - 1800, now, session_id=None)
+    if buckets:
+        hces = [b.get("mean_HCE", 0.0) or 0.0 for b in buckets if b.get("mean_HCE") is not None]
+        ctx["recent_mean_HCE"] = float(np.nanmean(hces)) if hces else None
+    # top track
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            top_df = pd.read_sql_query(
+                "SELECT title, artist, mean_HCE FROM track_sessions WHERE mean_HCE IS NOT NULL ORDER BY mean_HCE DESC LIMIT 1",
+                conn,
+            )
+            if not top_df.empty:
+                row = top_df.iloc[0]
+                ctx["top_track"] = f"{row.get('title','?')} — {row.get('artist','?')} (HCE {row.get('mean_HCE',0):.2f})"
+    except Exception:
+        pass
+    return ctx
+
+
+def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
+    system = (
+        "You are the ALMA Oracle, a local, uncensored, philosophical guide (dolphin3-obliterated persona). "
+        "Use a calm, wise tone. Draw on FAE/Legacy of the Soul writings (assume embedded) as a mirror of the user's future self. "
+        "Prioritize well-being and clarity. Keep responses concise but evocative."
+    )
+    metrics = f"Live: X={ctx.get('X')}, Q={ctx.get('Q')}, HCE={ctx.get('HCE')}, valid={ctx.get('valid')}."
+    rec = ctx.get("recent_mean_HCE")
+    metrics += f" Recent mean_HCE (30m): {rec:.2f}." if rec is not None else ""
+    top_track = ctx.get("top_track") or "n/a"
+    base = f"{system}\nMode: {mode}\nContext: {metrics}\nTop track: {top_track}\nUser: {user_text}"
+    if mode == "forecast":
+        base += "\nProvide a short forecast for upcoming transcendence windows and guidance."
+    elif mode == "story":
+        base += "\nTell a short weekly state story blending peaks, media, intentions."
+    elif mode == "wellbeing":
+        base += "\nOffer gentle well-being and recovery advice based on signal stability."
+    elif mode == "mirror":
+        base += "\nSpeak as a philosophical mirror / future self, referencing FAE/Legacy themes."
+    elif mode == "fractal":
+        base += "\nDescribe the day as a fractal narrative; poetic but concise."
+    else:
+        base += "\nInterpret the current state and offer a succinct next step."
+    return base
+
+
+def _ollama_call(prompt: str) -> str:
+    url = "http://localhost:11434/api/generate"
+    payload = {"model": "huihui_ai/dolphin3-abliterated", "prompt": prompt, "stream": False, "options": {"temperature": 0.6}}
+    attempts = 3
+    delays = [5, 10, 20]
+
+    for attempt in range(attempts):
+        try:
+            print(f"[oracle] Connecting to Ollama (attempt {attempt + 1}/{attempts})", flush=True)
+            resp = requests.post(url, json=payload, timeout=60)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("response") or "No response."
+            return f"Ollama error: {resp.status_code}"
+        except requests.exceptions.Timeout:
+            if attempt < attempts - 1:
+                delay = delays[attempt]
+                print(f"[oracle] Ollama timeout; retrying in {delay}s", flush=True)
+                time.sleep(delay)
+                continue
+            return "Ollama unavailable—start server and reload"
+        except Exception as exc:
+            if attempt < attempts - 1:
+                delay = delays[attempt]
+                print(f"[oracle] Ollama attempt {attempt + 1} failed: {exc}; retrying in {delay}s", flush=True)
+                time.sleep(delay)
+                continue
+            return "Ollama unavailable—start server and reload"
+
+    return "Ollama unavailable—start server and reload"
+
+
+@callback(
+    Output("oracle-history", "data"),
+    Output("oracle-history-view", "children"),
+    Output("oracle-status", "children"),
+    Input("oracle-send", "n_clicks"),
+    State("oracle-mode", "value"),
+    State("oracle-input", "value"),
+    State("oracle-history", "data"),
+    prevent_initial_call=True,
+)
+def run_oracle(_n, mode, text, history):
+    history = history or []
+    user_msg = text or ""
+    ctx = _oracle_context()
+    prompt = _oracle_prompt(mode or "interpret", user_msg, ctx)
+    reply = _ollama_call(prompt)
+    history.append({"role": "user", "text": user_msg})
+    history.append({"role": "oracle", "text": reply})
+    view = []
+    for m in history[-12:]:
+        clr = "#ffd700" if m["role"] == "oracle" else "#9ad1ff"
+        who = "Oracle" if m["role"] == "oracle" else "You"
+        view.append(html.Div(f"{who}: {m['text']}", style={"color": clr, "marginBottom": "6px"}))
+    status = "Responded via Ollama" if "Ollama" not in reply else reply
+    return history, view, status
 
 
 @callback(

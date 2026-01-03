@@ -15,7 +15,7 @@ python app.py
 ```
 If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
 
-## Key features (Phase 2/3/4/5/6)
+## Key features (Phase 2–7)
 - Live metrics + HCE: v4.2.1 metrics, EMA for X, HCE (super-linear, scaled) carried through snapshots/NDJSON/buckets. Top bar shows NDJSON status and live `X/Q/HCE` (3 decimals); NDJSON defaults to ON.
 - Predictive guidance: readiness shows “Peak harmony likely HH:00” forecast; global banners for flow/ideation/transcendent, stress, and relaxed harmony; transcendence forecast banner from historical hour-of-day HCE.
 - Stress/relax guardianship: Tunable thresholds in Settings; stress banner suggests recovery track from relax history; relaxed banner suggests extension tracks.
@@ -36,6 +36,7 @@ If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
   - Memory: similarity search with HCE weighting; quick captures list; TRANSCENDENT filter.
   - Spotify Resonance: visuals first (HCE histogram, top artists by HCE, bar/scatter, timeline, correlation heatmap, findings), Top 20 table at bottom; backfills missing means; suggested next track banner; relax-inducing tracks section.
   - Longitudinal Insights: media alchemy (HCE lift), circadian map, social vs solitary harmony, intention-outcome loops, “state story” generator with data-art scatter.
+  - Oracle (Phase 7): collapsible right sidebar using local Ollama (`huihui_ai/dolphin3-abliterated`) for state-aware guidance and narratives; 60s timeout + retry/backoff.
 - Turrell Room:
   - Runner launches `external/xq_turrell_room_2d_v6_hce.py` (HCE-enhanced); HUD/text fallback (SysFont→freetype→pixel), hotkeys logged (H, 0–3, F, ESC double-press), display retry, NDJSON follower tolerant to truncation; display selection (Primary/External) persisted.
   - v5_3 style script kept for reference; v6 is the active target.
@@ -61,3 +62,4 @@ Start from Environment page (NDJSON must be ON). Runner passes ndjson/mode paths
 - Port in use: stop other `python app.py` or run with a different PORT.
 - Font errors in Turrell: v6 falls back to freetype/pixel text; HUD remains visible even without pygame.font.
 - NDJSON empty: ensure engine running and `sessions/current/state_stream.ndjson` being written. ***!
+- Oracle unreachable: ensure `ollama serve` is running and model is pulled; `curl -s http://localhost:11434/api/tags` should respond.
