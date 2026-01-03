@@ -111,6 +111,81 @@ def _agg_tracks(df: pd.DataFrame, top_n: int = 20) -> pd.DataFrame:
     return g.head(top_n)
 
 
+def _fetch_relax_tracks(limit: int = 20) -> pd.DataFrame:
+    """Tracks that coincide with relaxed buckets (low volatility, moderate X, low HCE spikes)."""
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            q = """
+            SELECT
+                ts.track_id,
+                ts.title,
+                ts.artist,
+                ts.album,
+                AVG(b.mean_HCE) AS mean_HCE,
+                AVG(b.mean_Q) AS mean_Q,
+                AVG(b.mean_X) AS mean_X,
+                COUNT(*) AS bucket_hits,
+                SUM(COALESCE(ts.end_ts, ts.start_ts) - ts.start_ts) AS total_duration
+            FROM track_sessions ts
+            JOIN buckets b
+              ON b.bucket_start_ts >= ts.start_ts
+             AND b.bucket_start_ts <= COALESCE(ts.end_ts, ts.start_ts)
+            WHERE b.std_Q < 0.10
+              AND b.mean_X BETWEEN 1.6 AND 1.8
+              AND b.mean_HCE < 50.0
+              AND COALESCE(b.valid_fraction, 1.0) >= 0.9
+              AND ABS(COALESCE(b.Q_slope, 0.0)) <= 0.01
+            GROUP BY ts.track_id, ts.title, ts.artist, ts.album
+            ORDER BY bucket_hits DESC, mean_HCE ASC
+            LIMIT ?
+            """
+            df = pd.read_sql_query(q, conn, params=(limit,))
+            return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def _relax_table(df: pd.DataFrame) -> html.Div:
+    if df.empty:
+        return html.Div("No relaxed-matching tracks yet.", className="text-muted")
+    rows = []
+    for _, r in df.iterrows():
+        rows.append(
+            html.Tr(
+                [
+                    html.Td(r.get("artist", "")),
+                    html.Td(r.get("title", "")),
+                    html.Td(f"{r.get('mean_HCE', 0):.2f}"),
+                    html.Td(f"{r.get('mean_Q', 0):.3f}"),
+                    html.Td(f"{r.get('mean_X', 0):.3f}"),
+                    html.Td(int(r.get("bucket_hits", 0))),
+                    html.Td(f"{(r.get('total_duration', 0) or 0)/60:.1f}m"),
+                ]
+            )
+        )
+    return dbc.Table(
+        [
+            html.Thead(
+                html.Tr(
+                    [
+                        html.Th("Artist"),
+                        html.Th("Title"),
+                        html.Th("mean_HCE"),
+                        html.Th("mean_Q"),
+                        html.Th("mean_X"),
+                        html.Th("Occurrences"),
+                        html.Th("Duration"),
+                    ]
+                )
+            ),
+            html.Tbody(rows),
+        ],
+        bordered=True,
+        hover=True,
+        responsive=True,
+        size="sm",
+    )
+
 def _make_tables(df: pd.DataFrame) -> html.Div:
     if df.empty:
         return html.Div("No track sessions yet.", className="text-muted")
@@ -181,6 +256,24 @@ layout = dbc.Container(
                             ],
                             className="g-3 mb-3",
                         ),
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    [
+                                        html.Div("Relax-Inducing Tracks", className="fw-bold mb-2"),
+                                        html.Div(id="sr-relax-table"),
+                                    ],
+                                    md=7,
+                                    sm=12,
+                                ),
+                                dbc.Col(
+                                    dcc.Graph(id="sr-relax-bar"),
+                                    md=5,
+                                    sm=12,
+                                ),
+                            ],
+                            className="g-3 mb-3",
+                        ),
                         dbc.Card(
                             dbc.CardBody(
                                 [
@@ -224,6 +317,8 @@ layout = dbc.Container(
     Output("sr-findings", "children"),
     Output("sr-top-table", "children"),
     Output("sr-suggestion", "children"),
+    Output("sr-relax-table", "children"),
+    Output("sr-relax-bar", "figure"),
     Input("sr-interval", "n_intervals"),
     Input("sr-thr", "value"),
 )
@@ -364,5 +459,35 @@ def update_resonance(_n, thr):
     if s:
         suggestion = f"Suggested next: {s['title']} — {s['artist']} (mean_HCE {s['mean_HCE']}, {s['genre']}, {s['tempo']})"
 
-    return hist_fig, artist_fig, bar_fig, scatter_fig, tl_fig, corr_fig, findings, table, suggestion
+    relax_df = _fetch_relax_tracks(limit=20)
+    relax_table = _relax_table(relax_df)
+    if not relax_df.empty:
+        relax_bar = px.bar(
+            relax_df.head(10),
+            x="bucket_hits",
+            y="title",
+            color="artist",
+            orientation="h",
+            title="Top relaxation inducers (consistency)",
+            labels={"bucket_hits": "Relax occurrences"},
+            hover_data={"mean_HCE": ":.2f", "mean_Q": ":.3f", "mean_X": ":.3f"},
+        )
+        relax_bar.update_layout(template="plotly_dark", height=400)
+    else:
+        relax_bar = px.bar(title="Top relaxation inducers (consistency)")
+        relax_bar.update_layout(template="plotly_dark", height=400)
+
+    return (
+        hist_fig,
+        artist_fig,
+        bar_fig,
+        scatter_fig,
+        tl_fig,
+        corr_fig,
+        findings,
+        table,
+        suggestion,
+        relax_table,
+        relax_bar,
+    )
 

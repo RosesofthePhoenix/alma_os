@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.6 — Phase 6 insights, relaxation, and transcendence forecasting
+- Relaxation intelligence: Relax-inducing tracks section (Spotify Resonance) using std_Q<0.1, X 1.6–1.8, low HCE spikes; consistency bar + table.
+- Stress/refine guardianship: Thresholds tunable in Settings; stress banner suggests recovery track from relax history; relaxed-state banner suggests extension tracks.
+- Predictive transcendence: Hour-of-day forecast banner (“Transcendent window approaching”) from historical HCE; ETA guidance.
+- Longitudinal insights page: media alchemy (HCE lift), circadian map, social vs solitary harmony, intention-outcome loops, “state story” generator with data-art scatter.
+- UI/Settings: Stress thresholds inputs persisted; NDJSON default ON kept.
+
 ## v0.5 — Phase 5 predictive, guardian, and adaptive playback
 - Real-time banners: global top-center notifications for flow/ideation/transcendent states; stress banner with rationale and HCE-aware heuristics; NDJSON default ON.
 - Predictive guidance: readiness page shows “Peak harmony likely HH:00” forecast from recent buckets; HCE-weighted hour-of-day averaging.

@@ -15,10 +15,10 @@ python app.py
 ```
 If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
 
-## Key features (Phase 2/3/4/5)
+## Key features (Phase 2/3/4/5/6)
 - Live metrics + HCE: v4.2.1 metrics, EMA for X, HCE (super-linear, scaled) carried through snapshots/NDJSON/buckets. Top bar shows NDJSON status and live `X/Q/HCE` (3 decimals); NDJSON defaults to ON.
-- Predictive guidance: readiness shows “Peak harmony likely HH:00” forecast from recent buckets; global banners for flow/ideation/transcendent and stress patterns.
-- Stress awareness + settings: heuristic on X/std_Q/HCE ratio, validity, Q_slope; Settings add “Auto-adapt on stress” toggle and soothing source.
+- Predictive guidance: readiness shows “Peak harmony likely HH:00” forecast; global banners for flow/ideation/transcendent, stress, and relaxed harmony; transcendence forecast banner from historical hour-of-day HCE.
+- Stress/relax guardianship: Tunable thresholds in Settings; stress banner suggests recovery track from relax history; relaxed banner suggests extension tracks.
 - Baseline robustness: loads `baselines/baseline_global_muse_v1_revised.json` with fallbacks; status logged on engine init.
 - Persistence (SQLite `data/alma.db`):
   - Samples → buckets (mean_X/mean_Q/mean_HCE/std_Q/Q_slope/valid_fraction)
@@ -34,7 +34,8 @@ If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
   - Scheduler: draggable blocks + HCE-driven suggestions.
   - Recipes: CRUD, apply writes `sessions/current/adaptive_mode.json` (optionally launch Turrell).
   - Memory: similarity search with HCE weighting; quick captures list; TRANSCENDENT filter.
-  - Spotify Resonance: visuals first (HCE histogram, top artists by HCE, bar/scatter, timeline, correlation heatmap, findings), Top 20 table at bottom; backfills missing means; suggested next track banner.
+  - Spotify Resonance: visuals first (HCE histogram, top artists by HCE, bar/scatter, timeline, correlation heatmap, findings), Top 20 table at bottom; backfills missing means; suggested next track banner; relax-inducing tracks section.
+  - Longitudinal Insights: media alchemy (HCE lift), circadian map, social vs solitary harmony, intention-outcome loops, “state story” generator with data-art scatter.
 - Turrell Room:
   - Runner launches `external/xq_turrell_room_2d_v6_hce.py` (HCE-enhanced); HUD/text fallback (SysFont→freetype→pixel), hotkeys logged (H, 0–3, F, ESC double-press), display retry, NDJSON follower tolerant to truncation; display selection (Primary/External) persisted.
   - v5_3 style script kept for reference; v6 is the active target.

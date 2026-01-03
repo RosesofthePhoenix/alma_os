@@ -1,13 +1,19 @@
 import time
+import json
+import sqlite3
+import datetime as dt
+from pathlib import Path
 
 import dash
 import dash_bootstrap_components as dbc
 import numpy as np
+import pandas as pd
 from dash import Input, Output, State, callback, dcc, html
 
 from alma.ui import pages
 from alma.app_state import registry
 from alma.engine import storage
+from alma import config
 
 
 def build_sidebar() -> html.Div:
@@ -31,8 +37,11 @@ def build_layout() -> dbc.Container:
             dcc.Interval(id="live-metrics-interval", interval=1000, n_intervals=0),
             dcc.Interval(id="notif-interval", interval=3000, n_intervals=0),
             dcc.Interval(id="stress-interval", interval=5000, n_intervals=0),
+            dcc.Interval(id="relax-interval", interval=5000, n_intervals=0),
+            dcc.Interval(id="transcend-interval", interval=7000, n_intervals=0),
             dcc.Store(id="notif-store"),
             dcc.Store(id="stress-store"),
+            dcc.Store(id="relax-store"),
             html.Div(
                 id="notif-banner",
                 className="text-center fw-bold",
@@ -40,6 +49,16 @@ def build_layout() -> dbc.Container:
             ),
             html.Div(
                 id="stress-banner",
+                className="text-center fw-bold",
+                style={"display": "none", "marginBottom": "8px"},
+            ),
+            html.Div(
+                id="relax-banner",
+                className="text-center fw-bold",
+                style={"display": "none", "marginBottom": "8px"},
+            ),
+            html.Div(
+                id="transcend-banner",
                 className="text-center fw-bold",
                 style={"display": "none", "marginBottom": "8px"},
             ),
@@ -279,6 +298,19 @@ def _update_notif(_n):
 def _stress_watch(_n):
     now = time.time()
     buckets = storage.get_buckets_between(now - 240, now, session_id=None)
+    # Load thresholds from profile if present
+    try:
+        with open(Path(__file__).resolve().parents[3] / "profiles" / "default.json", "r", encoding="utf-8") as f:
+            profile = json.load(f)
+    except Exception:
+        profile = {}
+    x_thr = float(profile.get("STRESS_X_THR", 1.7))
+    stdq_thr = float(profile.get("STRESS_STDQ_THR", 0.12))
+    hce_thr = float(profile.get("STRESS_HCE_THR", 10.0))
+    ratio_thr = float(profile.get("STRESS_RATIO_THR", 50.0))
+    qslope_thr = float(profile.get("STRESS_QSLOPE_THR", -0.001))
+    auto_adapt = bool(profile.get("AUTO_ADAPT_STRESS"))
+
     mean_x = std_q = mean_q = mean_hce = q_slope = 0.0
     valid_drop = False
     if buckets:
@@ -301,22 +333,64 @@ def _stress_watch(_n):
     # Stress heuristic
     hce_ratio = mean_hce / (mean_q + 1e-6) if mean_q > 0 else 0.0
     likely_stress = (
-        mean_x > 1.7
-        and std_q > 0.15
-        and mean_hce < 10.0
-        and hce_ratio < 80.0
+        mean_x > x_thr
+        and std_q > stdq_thr
+        and mean_hce < hce_thr
+        and hce_ratio < ratio_thr
     )
-    if q_slope < 0:
-        likely_stress = likely_stress or (mean_x > 1.5 and std_q > 0.18)
+    if q_slope < qslope_thr:
+        likely_stress = likely_stress or (mean_x > max(1.5, x_thr - 0.2) and std_q > max(stdq_thr, 0.14))
     if valid_drop:
         likely_stress = likely_stress or (mean_x > 1.4 and std_q > 0.18)
 
     if not likely_stress:
         return "", {"display": "none"}
 
-    msg = "Stress pattern detected — high activation with volatile richness. Recommend soothing track?"
-    sub = "High activation with limited transcendent harmony—similar to past stress moments; relaxation advised."
-    text = html.Div([html.Div(msg), html.Div(sub, className="small")])
+    # Suggest a recovery track from relax-inducing list
+    recovery = ""
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            relax_df = pd.read_sql_query(
+                """
+                SELECT ts.title, ts.artist, COUNT(*) AS hits, AVG(b.mean_HCE) AS mean_HCE
+                FROM track_sessions ts
+                JOIN buckets b
+                  ON b.bucket_start_ts >= ts.start_ts
+                 AND b.bucket_start_ts <= COALESCE(ts.end_ts, ts.start_ts)
+                WHERE b.std_Q < 0.10
+                  AND b.mean_X BETWEEN 1.6 AND 1.8
+                  AND b.mean_HCE < 50.0
+                  AND COALESCE(b.valid_fraction, 1.0) >= 0.9
+                  AND ABS(COALESCE(b.Q_slope, 0.0)) <= 0.01
+                GROUP BY ts.title, ts.artist
+                ORDER BY hits DESC, mean_HCE ASC
+                LIMIT 1
+                """,
+                conn,
+            )
+            if not relax_df.empty:
+                r = relax_df.iloc[0]
+                recovery = f"{r.get('title','?')} — {r.get('artist','?')}"
+    except Exception:
+        pass
+
+    msg = "Stress pattern detected — high activation with volatile richness / low harmony."
+    sub = "Similar to past stress moments; relaxation advised."
+    if recovery:
+        sub = f"{sub} Suggested recovery: {recovery}"
+    buttons = []
+    if recovery:
+        buttons.append(
+            dbc.Button("Play Now", id="stress-play-now", color="danger", size="sm", className="ms-2")
+        )
+    if auto_adapt and recovery:
+        buttons.append(
+            dbc.Button("Auto-Adapt", id="stress-auto-adapt", color="secondary", size="sm", className="ms-2")
+        )
+    text_children = [html.Div(msg), html.Div(sub, className="small")]
+    if buttons:
+        text_children.append(html.Div(buttons, className="mt-1"))
+    text = html.Div(text_children)
     style = {
         "display": "block",
         "marginBottom": "8px",
@@ -324,6 +398,148 @@ def _stress_watch(_n):
         "borderRadius": "6px",
         "background": "#ffb3b3",
         "color": "#220000",
+        "opacity": 0.94,
+    }
+    return text, style
+
+
+@callback(
+    Output("relax-banner", "children"),
+    Output("relax-banner", "style"),
+    Input("relax-interval", "n_intervals"),
+)
+def _relax_watch(_n):
+    now = time.time()
+    buckets = storage.get_buckets_between(now - 240, now, session_id=None)
+    mean_x = std_q = mean_q = mean_hce = q_slope = 0.0
+    valid_ok = True
+    if buckets:
+        b = buckets[-1]
+        mean_x = float(b.get("mean_X") or 0.0)
+        std_q = float(b.get("std_Q") or 0.0)
+        mean_q = float(b.get("mean_Q") or 0.0)
+        mean_hce = float(b.get("mean_HCE") or 0.0)
+        q_slope = float(b.get("Q_slope") or 0.0)
+        valid_ok = float(b.get("valid_fraction") or 1.0) >= 0.9
+    else:
+        snap = registry.state_engine.get_status().get("latest_snapshot") or {}
+        raw = snap.get("raw", {}) if isinstance(snap.get("raw", {}), dict) else {}
+        mean_x = float(snap.get("X") or 0.0)
+        mean_q = float(snap.get("Q_vibe_focus") or snap.get("Q_vibe") or 0.0)
+        std_q = float(raw.get("std_Q") or 0.0)
+        mean_hce = float(raw.get("HCE_raw") or snap.get("HCE") or 0.0)
+        q_slope = float(raw.get("Q_slope") or 0.0)
+        valid_ok = bool((snap.get("reliability") or {}).get("valid", True))
+
+    relaxed = (
+        std_q < 0.10
+        and 1.6 <= mean_x <= 1.8
+        and mean_hce < 50.0
+        and abs(q_slope) <= 0.01
+        and valid_ok
+    )
+    # Avoid showing relax banner if stress is likely (prevents overlap)
+    hce_ratio = mean_hce / (mean_q + 1e-6) if mean_q > 0 else 999.0
+    stress_like = (mean_x > 1.7 and std_q > 0.12 and mean_hce < 10.0 and hce_ratio < 50.0)
+    if stress_like or not relaxed:
+        return "", {"display": "none"}
+
+    recovery = ""
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            relax_df = pd.read_sql_query(
+                """
+                SELECT ts.title, ts.artist, COUNT(*) AS hits, AVG(b.mean_HCE) AS mean_HCE
+                FROM track_sessions ts
+                JOIN buckets b
+                  ON b.bucket_start_ts >= ts.start_ts
+                 AND b.bucket_start_ts <= COALESCE(ts.end_ts, ts.start_ts)
+                WHERE b.std_Q < 0.10
+                  AND b.mean_X BETWEEN 1.6 AND 1.8
+                  AND b.mean_HCE < 50.0
+                  AND COALESCE(b.valid_fraction, 1.0) >= 0.9
+                  AND ABS(COALESCE(b.Q_slope, 0.0)) <= 0.01
+                GROUP BY ts.title, ts.artist
+                ORDER BY hits DESC, mean_HCE ASC
+                LIMIT 1
+                """,
+                conn,
+            )
+            if not relax_df.empty:
+                r = relax_df.iloc[0]
+                recovery = f"{r.get('title','?')} — {r.get('artist','?')}"
+    except Exception:
+        pass
+
+    msg = "Entering relaxed harmony — contemplative calm detected."
+    sub = "Matches proven relaxation states; extend with a similar track?"
+    if recovery:
+        sub = f"{sub} Suggested: {recovery}"
+    buttons = []
+    if recovery:
+        buttons.append(
+            dbc.Button("Play Now", id="relax-play-now", color="success", size="sm", className="ms-2")
+        )
+        buttons.append(
+            dbc.Button("Auto-Extend", id="relax-auto-extend", color="secondary", size="sm", className="ms-2")
+        )
+    text_children = [html.Div(msg), html.Div(sub, className="small")]
+    if buttons:
+        text_children.append(html.Div(buttons, className="mt-1"))
+    text = html.Div(text_children)
+    style = {
+        "display": "block",
+        "marginBottom": "8px",
+        "padding": "8px 10px",
+        "borderRadius": "6px",
+        "background": "#b3ffd9",
+        "color": "#002218",
+        "opacity": 0.94,
+    }
+    return text, style
+
+
+@callback(
+    Output("transcend-banner", "children"),
+    Output("transcend-banner", "style"),
+    Input("transcend-interval", "n_intervals"),
+)
+def _transcend_watch(_n):
+    now = time.time()
+    window_days = 14
+    buckets = storage.get_buckets_between(now - window_days * 86400, now, session_id=None)
+    if not buckets:
+        return "", {"display": "none"}
+    hours = {}
+    for b in buckets:
+        ts = b.get("bucket_start_ts")
+        if not ts:
+            continue
+        hour = dt.datetime.fromtimestamp(ts).hour
+        hours.setdefault(hour, []).append(float(b.get("mean_HCE") or 0.0))
+    if not hours:
+        return "", {"display": "none"}
+    hour_avg = [(h, sum(v) / len(v)) for h, v in hours.items()]
+    hour_avg.sort(key=lambda x: x[1], reverse=True)
+    top_hour, top_val = hour_avg[0]
+    if top_val < 2.0:
+        return "", {"display": "none"}
+    # Compute next occurrence (today or tomorrow)
+    now_dt = dt.datetime.now()
+    target_dt = now_dt.replace(hour=top_hour, minute=0, second=0, microsecond=0)
+    if target_dt < now_dt:
+        target_dt = target_dt + dt.timedelta(days=1)
+    eta_hours = (target_dt - now_dt).total_seconds() / 3600.0
+    msg = "Transcendent window approaching — prepare synthesis."
+    sub = f"Highest historical HCE around {top_hour:02d}:00 (avg {top_val:.2f}). ETA ~{eta_hours:.1f}h."
+    text = html.Div([html.Div(msg), html.Div(sub, className="small")])
+    style = {
+        "display": "block",
+        "marginBottom": "8px",
+        "padding": "8px 10px",
+        "borderRadius": "6px",
+        "background": "#ffe9a3",
+        "color": "#332400",
         "opacity": 0.94,
     }
     return text, style

@@ -114,6 +114,18 @@ layout = dbc.Container(
                                     md=4,
                                     sm=12,
                                 ),
+                                dbc.Col(
+                                    [
+                                        dbc.Label("Stress thresholds"),
+                                        dbc.Input(id="settings-stress-x", placeholder="mean_X > 1.7", size="sm", type="number", step="0.01"),
+                                        dbc.Input(id="settings-stress-stdq", placeholder="std_Q > 0.12", size="sm", type="number", step="0.01", className="mt-1"),
+                                        dbc.Input(id="settings-stress-hce", placeholder="HCE < 10", size="sm", type="number", step="0.5", className="mt-1"),
+                                        dbc.Input(id="settings-stress-ratio", placeholder="HCE/Q < 50", size="sm", type="number", step="1", className="mt-1"),
+                                        dbc.Input(id="settings-stress-qslope", placeholder="Q_slope < -0.001", size="sm", type="number", step="0.001", className="mt-1"),
+                                    ],
+                                    md=4,
+                                    sm=12,
+                                ),
                             ],
                             className="g-3 mb-3",
                         ),
@@ -163,6 +175,11 @@ layout = dbc.Container(
     Output("settings-spotify-device", "value"),
     Output("settings-auto-adapt", "value"),
     Output("settings-soothing-source", "value"),
+    Output("settings-stress-x", "value"),
+    Output("settings-stress-stdq", "value"),
+    Output("settings-stress-hce", "value"),
+    Output("settings-stress-ratio", "value"),
+    Output("settings-stress-qslope", "value"),
     Input("settings-load-interval", "n_intervals"),
 )
 def load_profile(_):
@@ -178,6 +195,11 @@ def load_profile(_):
         _get_field(profile, "SPOTIFY_PREFERRED_DEVICE", ""),
         ["auto"] if profile.get("AUTO_ADAPT_STRESS") else [],
         _get_field(profile, "SOOTHING_SOURCE", ""),
+        profile.get("STRESS_X_THR", 1.7),
+        profile.get("STRESS_STDQ_THR", 0.12),
+        profile.get("STRESS_HCE_THR", 10.0),
+        profile.get("STRESS_RATIO_THR", 50.0),
+        profile.get("STRESS_QSLOPE_THR", -0.001),
     )
 
 
@@ -194,9 +216,31 @@ def load_profile(_):
     State("settings-spotify-device", "value"),
     State("settings-auto-adapt", "value"),
     State("settings-soothing-source", "value"),
+    State("settings-stress-x", "value"),
+    State("settings-stress-stdq", "value"),
+    State("settings-stress-hce", "value"),
+    State("settings-stress-ratio", "value"),
+    State("settings-stress-qslope", "value"),
     prevent_initial_call=True,
 )
-def save_profile(n_clicks, profile_data, muse_address, ndjson_path, preferred_name, cid, secret, redirect_uri, device, auto_adapt, soothing_source):
+def save_profile(
+    n_clicks,
+    profile_data,
+    muse_address,
+    ndjson_path,
+    preferred_name,
+    cid,
+    secret,
+    redirect_uri,
+    device,
+    auto_adapt,
+    soothing_source,
+    stress_x,
+    stress_stdq,
+    stress_hce,
+    stress_ratio,
+    stress_qslope,
+):
     profile = profile_data or {}
     profile["muse_address"] = muse_address or ""
     profile["ndjson_state_path"] = ndjson_path or ""
@@ -211,6 +255,16 @@ def save_profile(n_clicks, profile_data, muse_address, ndjson_path, preferred_na
         profile["SPOTIFY_PREFERRED_DEVICE"] = device
     profile["AUTO_ADAPT_STRESS"] = bool(auto_adapt and "auto" in auto_adapt)
     profile["SOOTHING_SOURCE"] = soothing_source or ""
+    if stress_x is not None:
+        profile["STRESS_X_THR"] = float(stress_x)
+    if stress_stdq is not None:
+        profile["STRESS_STDQ_THR"] = float(stress_stdq)
+    if stress_hce is not None:
+        profile["STRESS_HCE_THR"] = float(stress_hce)
+    if stress_ratio is not None:
+        profile["STRESS_RATIO_THR"] = float(stress_ratio)
+    if stress_qslope is not None:
+        profile["STRESS_QSLOPE_THR"] = float(stress_qslope)
     ok, err = _save_profile(profile)
     if ok:
         return "Saved."
