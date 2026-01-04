@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.1 — Oracle prompt hardening + layout polish
+- Oracle prompt: shifted to a neutral, analytical, evidence-based system voice; draws solely from the canonical master document for context.
+- Canonical doc path fix: ensured the master document under `docs/` is loaded reliably; warning only if unreadable.
+- Sidebar UX: Oracle panel width expanded ~3× (1080px, max 90vw) for readable conversations.
+- LLM plumbing retained: 60s timeout with 3-attempt backoff (5/10/20s) and graceful fallback.
+
 ## v0.7 — Oracle companion and Ollama hardening
 - Oracle sidebar: collapsible right panel powered by local Ollama (`huihui_ai/dolphin3-abliterated`) for state/history-aware guidance, narratives, and chat; pulls live metrics + top track context.
 - Robust LLM calls: 60s timeout with 3-attempt exponential backoff (5/10/20s) and graceful fallback logging to avoid UI hangs when Ollama is slow or offline.

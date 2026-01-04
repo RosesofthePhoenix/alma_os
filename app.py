@@ -4,8 +4,6 @@ import dash_bootstrap_components as dbc
 from alma import config
 from alma.engine import storage
 from alma.app_state import registry
-from alma.ui.layout import build_layout
-from alma.ui import pages
 
 
 def create_app() -> Dash:
@@ -19,6 +17,11 @@ def create_app() -> Dash:
         assets_folder="alma/ui",
     )
     app.title = "alma_os"
+
+    # Import layout and pages AFTER app is created so @callback decorators bind to this app.
+    from alma.ui import pages
+    from alma.ui.layout import build_layout
+
     app.layout = build_layout()
     pages.register_page_callbacks(app)
     # Expose shared service registry on the app instance for future use.

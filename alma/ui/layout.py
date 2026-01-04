@@ -18,10 +18,8 @@ from alma.engine import storage
 from alma import config
 
 
-DOCS_DIR = Path(__file__).resolve().parents[3] / "docs"
-CANONICAL_PATH = DOCS_DIR / "alma_os_state_layer_canonical.md"
-LEGACY_PATH = DOCS_DIR / "Legacy of the Soul Final.txt"
-FAE_PATH = DOCS_DIR / "Fractal Architecture of Existence.pdf"
+DOCS_DIR = Path(__file__).resolve().parents[2] / "docs"
+MASTER_PATH = DOCS_DIR / "Canonical Master Document- The Complete Context of Ray Craigs Body of Work and ALMA OS.txt"
 
 
 def _safe_read_text(path: Path, max_chars: int = 4000) -> str:
@@ -31,24 +29,25 @@ def _safe_read_text(path: Path, max_chars: int = 4000) -> str:
         return ""
 
 
-CANONICAL_TEXT = _safe_read_text(CANONICAL_PATH, max_chars=8000)
-LEGACY_EXCERPT = _safe_read_text(LEGACY_PATH, max_chars=1200)
-FAE_EXCERPT = (
-    "Fractal Architecture of Existence — recursive self-similarity, embodied rhythm, "
-    "alignment of micro/macro states, coherence, intention, iterative refinement toward transcendence."
-)
-if not LEGACY_EXCERPT:
-    LEGACY_EXCERPT = "Legacy of the Soul excerpt unavailable; see docs/Legacy of the Soul Final.txt."
-if not CANONICAL_TEXT:
-    CANONICAL_TEXT = "Canonical metric guide missing; ensure docs/alma_os_state_layer_canonical.md exists."
+MASTER_TEXT = _safe_read_text(MASTER_PATH, max_chars=12000)
+if not MASTER_TEXT:
+    MASTER_TEXT = (
+        "Canonical Master Document missing; ensure it exists at "
+        "docs/Canonical Master Document- The Complete Context of Ray Craigs Body of Work and ALMA OS.txt"
+    )
 
 ORACLE_SYSTEM_PREFIX = (
-    "You are a transcendent oracle embodying FAE/Legacy principles. "
-    "Use this canonical metric guide and excerpts as system context. "
-    "Always reference the current track from context; avoid repeating past tracks unless truly relevant.\n\n"
-    f"{CANONICAL_TEXT}\n\n"
-    f"FAE excerpt (Fractal Architecture of Existence): {FAE_EXCERPT}\n\n"
-    f"Legacy excerpt: {LEGACY_EXCERPT}\n"
+    "You are a super-intelligent, neutral, analytical AI colleague embedded in ALMA OS. "
+    "Your responses must always be formal, precise, evidence-based, concise yet thorough, "
+    "and focused on actionable insights derived from live/historical EEG states (X, Q variants, HCE), "
+    "reliability/validity, bucket aggregates, events, Spotify outcomes, social context, intentions, recipes, and scheduler data.\n\n"
+    "Core context (single source of truth):\n"
+    f"{MASTER_TEXT}\n\n"
+    "Never use mystical, transcendent, or inspirational language. "
+    "Prioritize empirical rigor. "
+    "If data is insufficient, state it clearly and suggest improvements. "
+    "Reference specific trends (e.g., 'Based on last 30 days buckets...'). "
+    "Suggest recipes, scheduler adjustments, or actuations only when empirically supported."
 )
 
 
@@ -115,7 +114,8 @@ def build_layout() -> dbc.Container:
                     "position": "fixed",
                     "top": "50px",
                     "right": "0",
-                    "width": "360px",
+                    "width": "1080px",
+                    "maxWidth": "90vw",
                     "height": "90vh",
                     "background": "#0b0b12",
                     "color": "#e8e6ff",
@@ -704,31 +704,36 @@ def _oracle_context():
 
 
 def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
-    system = ORACLE_SYSTEM_PREFIX
-    metrics = f"Live: X={ctx.get('X')}, Q={ctx.get('Q')}, HCE={ctx.get('HCE')}, valid={ctx.get('valid')}."
-    rec = ctx.get("recent_mean_HCE")
-    metrics += f" Recent mean_HCE (30m): {rec:.2f}." if rec is not None else ""
-    current_track = ctx.get("current_track") or "n/a"
-    top_track = ctx.get("top_track") or "n/a"
-    base = (
-        f"{system}\nMode: {mode}\nContext: {metrics}\n"
-        f"Current track: {current_track}\nTop track (historical): {top_track}\n"
-        "Prefer grounding in the current track; avoid repeating historical tracks unless clearly relevant.\n"
-        f"User: {user_text}"
+    metrics = (
+        f"Live state: X={ctx.get('X')}, Q={ctx.get('Q')}, HCE={ctx.get('HCE')}, "
+        f"validity={'valid' if ctx.get('valid') else 'invalid'}."
     )
-    if mode == "forecast":
-        base += "\nProvide a short forecast for upcoming transcendence windows and guidance."
-    elif mode == "story":
-        base += "\nTell a short weekly state story blending peaks, media, intentions."
-    elif mode == "wellbeing":
-        base += "\nOffer gentle well-being and recovery advice based on signal stability."
-    elif mode == "mirror":
-        base += "\nSpeak as a philosophical mirror / future self, referencing FAE/Legacy themes."
-    elif mode == "fractal":
-        base += "\nDescribe the day as a fractal narrative; poetic but concise."
-    else:
-        base += "\nInterpret the current state and offer a succinct next step."
-    return base
+    recent_hce = ctx.get("recent_mean_HCE")
+    if recent_hce is not None:
+        metrics += f" Recent mean HCE (30m rolling): {recent_hce:.3f}."
+
+    current_track = ctx.get("current_track")
+    if current_track and current_track != "n/a":
+        metrics += f" Current track: {current_track}."
+
+    base_prompt = (
+        f"{ORACLE_SYSTEM_PREFIX}\n\n"
+        f"Mode: {mode}\n"
+        f"Current context: {metrics}\n\n"
+        f"User query: {user_text}\n"
+        "Respond with analytical insights and actionable recommendations only."
+    )
+
+    mode_guidance = {
+        "interpret": "Analyze current state and recent patterns; explain drivers of HCE shifts.",
+        "forecast": "Project likely HCE windows based on circadian/hour-of-day historical aggregates.",
+        "story": "Generate concise narrative summary of session/day trends (data-driven only).",
+        "wellbeing": "Recommend evidence-based adjustments for sustained harmony and recovery.",
+        "mirror": "Reflect observed patterns neutrally with empirical correlations.",
+        "fractal": "Identify recursive patterns across scales (micro neural → macro daily).",
+    }.get(mode.lower(), "")
+
+    return base_prompt + (f"\nMode guidance: {mode_guidance}" if mode_guidance else "")
 
 
 def _ollama_call(prompt: str) -> str:
