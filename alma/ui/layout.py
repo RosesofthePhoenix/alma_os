@@ -4,6 +4,7 @@ import sqlite3
 import datetime as dt
 from pathlib import Path
 from typing import Dict
+import re
 import requests
 
 import dash
@@ -11,6 +12,7 @@ import dash_bootstrap_components as dbc
 import numpy as np
 import pandas as pd
 from dash import Input, Output, State, callback, dcc, html
+from dash.dependencies import ClientsideFunction
 
 from alma.ui import pages
 from alma.app_state import registry
@@ -74,11 +76,15 @@ def build_layout() -> dbc.Container:
             dcc.Interval(id="stress-interval", interval=5000, n_intervals=0),
             dcc.Interval(id="relax-interval", interval=5000, n_intervals=0),
             dcc.Interval(id="transcend-interval", interval=7000, n_intervals=0),
+            dcc.Interval(id="forecast-interval", interval=8000, n_intervals=0),
             dcc.Store(id="notif-store"),
             dcc.Store(id="stress-store"),
             dcc.Store(id="relax-store"),
             dcc.Store(id="oracle-open", data=False),
             dcc.Store(id="oracle-history", data=[]),
+            dcc.Store(id="oracle-speak-input", data=True),
+            dcc.Store(id="oracle-read-output", data=True),
+            dcc.Store(id="forecast-store"),
             html.Div(
                 id="notif-banner",
                 className="text-center fw-bold",
@@ -96,6 +102,11 @@ def build_layout() -> dbc.Container:
             ),
             html.Div(
                 id="transcend-banner",
+                className="text-center fw-bold",
+                style={"display": "none", "marginBottom": "8px"},
+            ),
+            html.Div(
+                id="forecast-banner",
                 className="text-center fw-bold",
                 style={"display": "none", "marginBottom": "8px"},
             ),
@@ -142,13 +153,64 @@ def build_layout() -> dbc.Container:
                         clearable=False,
                         style={"color": "#000"},
                     ),
-                    html.Div(id="oracle-history-view", className="mt-2", style={"maxHeight": "50vh", "overflowY": "auto"}),
+                    html.Div(
+                        id="oracle-history-view",
+                        className="mt-2",
+                        style={
+                            "maxHeight": "55vh",
+                            "overflowY": "auto",
+                            "whiteSpace": "pre-wrap",
+                            "wordBreak": "break-word",
+                            "fontSize": "1.1rem",
+                            "padding": "10px",
+                            "lineHeight": "1.5",
+                        },
+                    ),
                     dcc.Textarea(
                         id="oracle-input",
                         placeholder="Ask the Oracle...",
                         style={"width": "100%", "height": "80px", "marginTop": "8px"},
                     ),
-                    dbc.Button("Send", id="oracle-send", color="primary", size="sm", className="mt-2"),
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                dbc.Button(
+                                    "🎤",
+                                    id="oracle-mic",
+                                    color="info",
+                                    size="sm",
+                                    className="mt-2",
+                                    style={"boxShadow": "0 0 8px #0ff", "minWidth": "48px"},
+                                ),
+                                width="auto",
+                            ),
+                            dbc.Col(
+                                dbc.Button(
+                                    "Send",
+                                    id="oracle-send",
+                                    color="primary",
+                                    size="sm",
+                                    className="mt-2",
+                                ),
+                                width="auto",
+                            ),
+                            dbc.Col(
+                                dbc.Checklist(
+                                    id="oracle-voice-toggles",
+                                    options=[
+                                        {"label": "Speak Input", "value": "speak"},
+                                        {"label": "Read Responses", "value": "read"},
+                                    ],
+                                    value=["speak", "read"],
+                                    switch=True,
+                                    inline=True,
+                                    className="mt-2 text-info",
+                                ),
+                            ),
+                        ],
+                        className="g-2 align-items-center",
+                    ),
+                    html.Div(id="oracle-voice-status", className="small text-muted mt-1"),
                     html.Div(id="oracle-status", className="small text-muted mt-1"),
                 ],
             ),
@@ -289,8 +351,8 @@ def build_layout() -> dbc.Container:
             ),
             dbc.Row(
                 [
-                    dbc.Col(build_sidebar(), width=12, md=3, lg=2, className="sidebar-column"),
-                    dbc.Col(html.Div(id="page-content", className="page-content"), width=12, md=9, lg=10),
+                    dbc.Col(build_sidebar(), xs=12, md=1, className="sidebar-column"),
+                    dbc.Col(html.Div(id="page-content", className="page-content"), xs=12, md=11),
                 ],
                 className="app-row",
             ),
@@ -636,25 +698,72 @@ def _transcend_watch(_n):
 
 
 @callback(
+    Output("forecast-store", "data"),
+    Output("forecast-banner", "children"),
+    Output("forecast-banner", "style"),
+    Input("forecast-interval", "n_intervals"),
+)
+def _forecast_watch(_n):
+    data = _forecast_probabilities()
+    if not data:
+        return {}, "", {"display": "none"}
+    probs = data.get("transcend") or []
+    visible_probs = [p for p in probs if p.get("prob") is not None]
+    if visible_probs:
+        top = max(visible_probs, key=lambda p: p["prob"])
+        msg = f"Transcendent window likelihood in {top['h']}h: {top['prob']*100:.1f}% (p90={data.get('p90',0):.2f})"
+    else:
+        msg = "Forecast pending more history."
+    strain = data.get("strain")
+    media = data.get("media")
+    parts = [msg]
+    if strain is not None:
+        parts.append(f"Strain risk: {strain*100:.1f}%")
+    if media is not None:
+        parts.append(f"Media lift prob: {media*100:.1f}%")
+    banner_txt = " | ".join(parts)
+    style = {
+        "display": "block",
+        "marginBottom": "8px",
+        "padding": "6px 10px",
+        "borderRadius": "6px",
+        "background": "#cddc39",
+        "color": "#202020",
+        "opacity": 0.9,
+    }
+    return data, banner_txt, style
+
+
+@callback(
     Output("oracle-open", "data"),
     Output("oracle-panel", "style"),
+    Output("oracle-speak-input", "data"),
+    Output("oracle-read-output", "data"),
     Input("oracle-toggle", "n_clicks"),
     Input("oracle-close", "n_clicks"),
+    Input("oracle-voice-toggles", "value"),
     State("oracle-open", "data"),
+    State("oracle-speak-input", "data"),
+    State("oracle-read-output", "data"),
     prevent_initial_call=True,
 )
-def toggle_oracle(open_click, close_click, is_open):
+def toggle_oracle(open_click, close_click, toggles, is_open, speak_on, read_on):
     triggered = dash.callback_context.triggered[0]["prop_id"].split(".")[0] if dash.callback_context.triggered else None
     if triggered == "oracle-toggle":
         is_open = not bool(is_open)
     elif triggered == "oracle-close":
         is_open = False
-    style = {
+    # Update toggles from checklist
+    toggles = toggles or []
+    speak_on = "speak" in toggles
+    read_on = "read" in toggles
+    panel_style = {
         "display": "block" if is_open else "none",
         "position": "fixed",
         "top": "50px",
         "right": "0",
-        "width": "360px",
+        "width": "1080px",
+        "maxWidth": "90vw",
         "height": "90vh",
         "background": "#0b0b12",
         "color": "#e8e6ff",
@@ -664,7 +773,7 @@ def toggle_oracle(open_click, close_click, is_open):
         "zIndex": 1100,
         "overflowY": "auto",
     }
-    return is_open, style
+    return is_open, panel_style, speak_on, read_on
 
 
 def _oracle_context():
@@ -700,6 +809,10 @@ def _oracle_context():
             ctx["current_track"] = f"{latest_track.get('track_name','?')} — {latest_track.get('artists','?')}"
     except Exception:
         pass
+    # Forecast snapshot
+    ctx["forecast"] = _forecast_probabilities()
+    # Patterns / intentions
+    ctx["patterns"] = _pattern_revelations()
     return ctx
 
 
@@ -716,10 +829,48 @@ def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
     if current_track and current_track != "n/a":
         metrics += f" Current track: {current_track}."
 
+    patterns = ctx.get("patterns") or {}
+    pattern_lines = []
+    if patterns.get("social_best"):
+        s, v = patterns["social_best"]
+        pattern_lines.append(f"Social context with highest HCE: {s} (mean {v:.2f}).")
+    if patterns.get("activity_best"):
+        s, v = patterns["activity_best"]
+        pattern_lines.append(f"Activity with highest HCE: {s} (mean {v:.2f}).")
+    if patterns.get("mood_peak"):
+        m, v = patterns["mood_peak"]
+        pattern_lines.append(f"Mood peak: {m} → HCE {v:.2f}.")
+    if patterns.get("media_peak"):
+        pattern_lines.append(f"Top media lift: {patterns['media_peak']}.")
+    if patterns.get("intention_top"):
+        inten, delta = patterns["intention_top"]
+        pattern_lines.append(f"Intention payoff: \"{inten}\" → HCE Δ {delta:.2f}.")
+    patterns_txt = "\n".join(pattern_lines) if pattern_lines else "No strong patterns yet."
+
+    forecast = ctx.get("forecast") or {}
+    forecast_lines = []
+    p90 = forecast.get("p90")
+    if p90 is not None:
+        forecast_lines.append(f"P90 HCE={p90:.2f}")
+    trans = forecast.get("transcend") or []
+    vis = [p for p in trans if p.get("prob") is not None]
+    if vis:
+        best = max(vis, key=lambda p: p["prob"])
+        forecast_lines.append(f"Transcendent in {best['h']}h: {best['prob']*100:.1f}%")
+    strain = forecast.get("strain")
+    if strain is not None:
+        forecast_lines.append(f"Strain risk: {strain*100:.1f}%")
+    media = forecast.get("media")
+    if media is not None:
+        forecast_lines.append(f"Media lift prob: {media*100:.1f}%")
+    forecast_txt = "\n".join(forecast_lines) if forecast_lines else "Forecast: n/a"
+
     base_prompt = (
         f"{ORACLE_SYSTEM_PREFIX}\n\n"
         f"Mode: {mode}\n"
         f"Current context: {metrics}\n\n"
+        f"Patterns:\n{patterns_txt}\n\n"
+        f"Forecast:\n{forecast_txt}\n\n"
         f"User query: {user_text}\n"
         "Respond with analytical insights and actionable recommendations only."
     )
@@ -745,7 +896,7 @@ def _ollama_call(prompt: str) -> str:
     for attempt in range(attempts):
         try:
             print(f"[oracle] Connecting to Ollama (attempt {attempt + 1}/{attempts})", flush=True)
-            resp = requests.post(url, json=payload, timeout=60)
+            resp = requests.post(url, json=payload, timeout=90)
             if resp.status_code == 200:
                 data = resp.json()
                 return data.get("response") or "No response."
@@ -766,6 +917,171 @@ def _ollama_call(prompt: str) -> str:
             return "Ollama unavailable—start server and reload"
 
     return "Ollama unavailable—start server and reload"
+
+
+def _highlight_hce(text: str):
+    parts = []
+    for seg in re.split(r"(HCE)", text or ""):
+        if seg == "HCE":
+            parts.append(html.Span("HCE", style={"color": "#d7b34d", "fontWeight": 600}))
+        else:
+            parts.append(seg)
+    return parts
+
+
+def _forecast_probabilities() -> Dict[str, object]:
+    now = time.time()
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            df = pd.read_sql_query(
+                "SELECT bucket_start_ts, mean_HCE, mean_X, std_Q FROM buckets WHERE bucket_start_ts IS NOT NULL",
+                conn,
+            )
+    except Exception:
+        return {}
+    if df.empty:
+        return {}
+    df = df.dropna(subset=["bucket_start_ts", "mean_HCE"])
+    if df.empty:
+        return {}
+    df["hour"] = df["bucket_start_ts"].apply(lambda t: dt.datetime.fromtimestamp(t).hour)
+    p90 = float(np.nanpercentile(df["mean_HCE"], 90)) if not df["mean_HCE"].isna().all() else 0.0
+    probs = []
+    for h in [1, 3, 6]:
+        target_hour = int(dt.datetime.fromtimestamp(now + h * 3600).hour)
+        subset = df[df["hour"] == target_hour]
+        if subset.empty:
+            probs.append({"h": h, "prob": None})
+        else:
+            prob = float((subset["mean_HCE"] > p90).mean())
+            probs.append({"h": h, "prob": prob})
+    strain_prob = float(
+        ((df["mean_X"] > 1.7) & (df["std_Q"] > 0.12)).mean()
+    ) if not df.empty else None
+
+    media_prob = None
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            tracks = pd.read_sql_query(
+                "SELECT mean_HCE FROM track_sessions WHERE mean_HCE IS NOT NULL", conn
+            )
+        if not tracks.empty:
+            median_hce = tracks["mean_HCE"].median()
+            media_prob = float((tracks["mean_HCE"] > median_hce).mean())
+    except Exception:
+        media_prob = None
+
+    return {"p90": p90, "transcend": probs, "strain": strain_prob, "media": media_prob}
+
+
+def _pattern_revelations() -> Dict[str, object]:
+    out: Dict[str, object] = {}
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            events = pd.read_sql_query(
+                "SELECT ts, note, tags_json, context_json FROM events WHERE ts IS NOT NULL", conn
+            )
+            buckets = pd.read_sql_query(
+                "SELECT bucket_start_ts, mean_HCE, mean_X, std_Q, mean_Q FROM buckets WHERE bucket_start_ts IS NOT NULL",
+                conn,
+            )
+            tracks = pd.read_sql_query(
+                "SELECT title, artist, mean_HCE, mean_Q, mean_X FROM track_sessions WHERE mean_HCE IS NOT NULL",
+                conn,
+            )
+    except Exception:
+        return out
+
+    if not buckets.empty:
+        # Social/mood/activity correlations (simple averages)
+        def parse_ctx(row):
+            raw = row.get("context_json") or row.get("tags_json") or "{}"
+            try:
+                return json.loads(raw) if isinstance(raw, str) else (raw or {})
+            except Exception:
+                return {}
+
+        rows = []
+        for _, r in events.iterrows():
+            ctx = parse_ctx(r)
+            social = ctx.get("social") or ctx.get("home_bookmark_social") or "unknown"
+            activity = ctx.get("activity") or ctx.get("home_bookmark_activity") or "unknown"
+            mood = ctx.get("mood")
+            ts = r.get("ts") or 0
+            nearby = buckets[(buckets["bucket_start_ts"] >= ts - 900) & (buckets["bucket_start_ts"] <= ts + 900)]
+            if nearby.empty:
+                continue
+            hce = nearby["mean_HCE"].mean()
+            rows.append({"social": social, "activity": activity, "mood": mood, "hce": hce})
+        if rows:
+            df = pd.DataFrame(rows)
+            social_best = df.groupby("social")["hce"].mean().sort_values(ascending=False).head(1)
+            if not social_best.empty:
+                out["social_best"] = (social_best.index[0], float(social_best.iloc[0]))
+            act_best = df.groupby("activity")["hce"].mean().sort_values(ascending=False).head(1)
+            if not act_best.empty:
+                out["activity_best"] = (act_best.index[0], float(act_best.iloc[0]))
+            mood_drop = df.dropna(subset=["mood"])
+            if not mood_drop.empty:
+                mood_corr = mood_drop.groupby("mood")["hce"].mean().sort_values(ascending=False).head(1)
+                if not mood_corr.empty:
+                    out["mood_peak"] = (int(mood_corr.index[0]), float(mood_corr.iloc[0]))
+
+    if not tracks.empty:
+        top_track = tracks.sort_values("mean_HCE", ascending=False).head(1)
+        if not top_track.empty:
+            r = top_track.iloc[0]
+            out["media_peak"] = f"{r.get('title','?')} — {r.get('artist','?')} (HCE {r.get('mean_HCE',0):.2f})"
+
+    # Intention follow-up: compare HCE after intention vs baseline before
+    if not events.empty and not buckets.empty:
+        inten_rows = []
+        for _, r in events.iterrows():
+            ctx_raw = r.get("context_json") or r.get("tags_json") or "{}"
+            try:
+                ctx = json.loads(ctx_raw) if isinstance(ctx_raw, str) else (ctx_raw or {})
+            except Exception:
+                ctx = {}
+            intention = ctx.get("intention") or ""
+            if not intention:
+                continue
+            ts = r.get("ts") or 0
+            before = buckets[(buckets["bucket_start_ts"] >= ts - 900) & (buckets["bucket_start_ts"] < ts)]
+            after = buckets[(buckets["bucket_start_ts"] >= ts) & (buckets["bucket_start_ts"] <= ts + 1200)]
+            if after.empty:
+                continue
+            before_mean = before["mean_HCE"].mean() if not before.empty else np.nan
+            after_mean = after["mean_HCE"].mean()
+            delta = after_mean - before_mean if not np.isnan(before_mean) else np.nan
+            inten_rows.append({"intention": intention, "delta": delta, "after": after_mean})
+        inten_df = pd.DataFrame(inten_rows)
+        if not inten_df.empty:
+            inten_df = inten_df.dropna(subset=["delta"])
+            if not inten_df.empty:
+                top = inten_df.sort_values("delta", ascending=False).head(1)
+                out["intention_top"] = (top.iloc[0]["intention"], float(top.iloc[0]["delta"]))
+
+    return out
+
+
+# Client-side callbacks for voice features
+dash.clientside_callback(
+    ClientsideFunction(namespace="oracle", function_name="micHandler"),
+    [Output("oracle-input", "value"), Output("oracle-voice-status", "children")],
+    Input("oracle-mic", "n_clicks"),
+    State("oracle-speak-input", "data"),
+    State("oracle-input", "value"),
+    prevent_initial_call=True,
+)
+
+
+dash.clientside_callback(
+    ClientsideFunction(namespace="oracle", function_name="ttsHandler"),
+    Output("oracle-status", "title"),
+    Input("oracle-history", "data"),
+    State("oracle-read-output", "data"),
+    prevent_initial_call=True,
+)
 
 
 @callback(
@@ -790,7 +1106,7 @@ def run_oracle(_n, mode, text, history):
     for m in history[-12:]:
         clr = "#ffd700" if m["role"] == "oracle" else "#9ad1ff"
         who = "Oracle" if m["role"] == "oracle" else "You"
-        view.append(html.Div(f"{who}: {m['text']}", style={"color": clr, "marginBottom": "6px"}))
+        view.append(html.Div([f"{who}: "] + _highlight_hce(str(m["text"])), style={"color": clr, "marginBottom": "8px", "lineHeight": "1.5"}))
     status = "Responded via Ollama" if "Ollama" not in reply else reply
     return history, view, status
 

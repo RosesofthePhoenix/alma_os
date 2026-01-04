@@ -1,13 +1,16 @@
 import datetime as dt
+import io
 import json
 import sqlite3
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import dash_bootstrap_components as dbc
 import numpy as np
 import pandas as pd
 import plotly.express as px
-from dash import Input, Output, callback, dcc, html
+import plotly.graph_objects as go
+import plotly.io as pio
+from dash import Input, Output, State, callback, ctx, dcc, html
 
 from alma import config
 
@@ -142,6 +145,90 @@ def _intention_loops(events: pd.DataFrame, buckets: pd.DataFrame) -> pd.DataFram
     return pd.DataFrame(intents).sort_values("mean_HCE", ascending=False).head(10)
 
 
+def _fetch_fractal_data(window: Optional[Tuple[float, float]] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    buckets = _fetch_buckets()
+    events = _fetch_events()
+    if window and not buckets.empty:
+        start, end = window
+        buckets = buckets[(buckets["bucket_start_ts"] >= start) & (buckets["bucket_start_ts"] <= end)]
+        events = events[(events["ts"] >= start) & (events["ts"] <= end)]
+    return buckets, events
+
+
+def _build_fractal_fig(buckets: pd.DataFrame, events: pd.DataFrame) -> go.Figure:
+    if buckets.empty:
+        return go.Figure()
+    df = buckets.copy()
+    df["dt"] = df["bucket_start_ts"].apply(lambda t: dt.datetime.fromtimestamp(t))
+    hover = (
+        "Time=%{x|%Y-%m-%d %H:%M}<br>HCE=%{y:.2f}<br>X=%{customdata[0]:.3f}"
+        "<br>std_Q=%{marker.size:.3f}<br>Q_slope=%{customdata[1]:.3f}"
+    )
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scattergl(
+            x=df["dt"],
+            y=df["mean_HCE"],
+            mode="markers",
+            marker=dict(
+                size=np.clip(df["std_Q"] * 120, 6, 28),
+                color=df["mean_X"],
+                colorscale="Plasma",
+                showscale=True,
+                colorbar=dict(title="X"),
+                opacity=0.75,
+            ),
+            customdata=np.stack([df["mean_X"], df["Q_slope"]], axis=1),
+            hovertemplate=hover,
+            name="Buckets",
+        )
+    )
+    if not events.empty:
+        ev = events.copy()
+        ev["dt"] = ev["ts"].apply(lambda t: dt.datetime.fromtimestamp(t))
+        notes = []
+        for _, r in ev.iterrows():
+            tags_txt = ""
+            try:
+                tags = json.loads(r.get("tags_json") or "{}") if isinstance(r.get("tags_json"), str) else r.get("tags_json") or {}
+                social = tags.get("social") or tags.get("home_bookmark_social") or ""
+                act = tags.get("activity") or ""
+                mood = tags.get("mood")
+                bits = [r.get("note") or ""]
+                if act:
+                    bits.append(f"act:{act}")
+                if social:
+                    bits.append(f"soc:{social}")
+                if mood is not None:
+                    bits.append(f"mood:{mood}")
+                tags_txt = " | ".join([b for b in bits if b])
+            except Exception:
+                tags_txt = r.get("note") or ""
+            notes.append(tags_txt)
+        fig.add_trace(
+            go.Scatter(
+                x=ev["dt"],
+                y=[df["mean_HCE"].max() * 1.05 if not df.empty else 0] * len(ev),
+                mode="markers",
+                marker=dict(symbol="star", size=10, color="#ff9f43", line=dict(color="#ffa", width=1)),
+                text=notes,
+                hovertemplate="%{text}<br>%{x|%Y-%m-%d %H:%M}",
+                name="Events",
+            )
+        )
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=480,
+        margin=dict(l=10, r=10, t=40, b=40),
+        title="Fractal Life Timeline",
+        xaxis=dict(rangeslider=dict(visible=True), title="Time", showgrid=False),
+        yaxis=dict(title="HCE"),
+        dragmode="zoom",
+    )
+    return fig
+
+
 layout = dbc.Container(
     [
         dbc.Card(
@@ -149,6 +236,19 @@ layout = dbc.Container(
                 dbc.CardHeader("Longitudinal Insights"),
                 dbc.CardBody(
                     [
+                        html.Div(
+                            [
+                                html.Div(
+                                    "“Fractal echoes of your days reveal the larger harmony.”",
+                                    className="text-info mb-1",
+                                ),
+                                html.Div(
+                                    "“Every peak and valley sketches a chapter of the soul.”",
+                                    className="text-warning small",
+                                ),
+                            ],
+                            className="mb-2",
+                        ),
                         dbc.Row(
                             [
                                 dbc.Col(dcc.Graph(id="li-media"), md=6, sm=12),
@@ -166,6 +266,18 @@ layout = dbc.Container(
                         dbc.Card(
                             dbc.CardBody(
                                 [
+                                    html.Div("Fractal Life Chronicles", className="fw-bold mb-2"),
+                                    dcc.Graph(id="li-fractal"),
+                                    html.Div(id="li-fractal-narrative", className="mt-2"),
+                                    dbc.Button("Export Chapter (PDF)", id="li-export-btn", color="secondary", size="sm", className="mt-2"),
+                                    dcc.Download(id="li-export"),
+                                ]
+                            ),
+                            className="page-card mb-3",
+                        ),
+                        dbc.Card(
+                            dbc.CardBody(
+                                [
                                     html.Div("Oracle", className="fw-bold mb-2"),
                                     html.Div(id="li-oracle"),
                                     dbc.Button("Generate State Story", id="li-story-btn", color="info", size="sm", className="mt-2"),
@@ -176,6 +288,7 @@ layout = dbc.Container(
                             className="page-card",
                         ),
                         dcc.Interval(id="li-interval", interval=6000, n_intervals=0),
+                        dcc.Store(id="li-fractal-window"),
                     ]
                 ),
             ],
@@ -193,9 +306,11 @@ layout = dbc.Container(
     Output("li-social", "figure"),
     Output("li-intentions", "figure"),
     Output("li-oracle", "children"),
+    Output("li-fractal", "figure"),
     Input("li-interval", "n_intervals"),
+    Input("li-fractal-window", "data"),
 )
-def update_longitudinal(_n):
+def update_longitudinal(_n, window):
     buckets = _fetch_buckets()
     events = _fetch_events()
     tracks = _fetch_tracks()
@@ -269,7 +384,10 @@ def update_longitudinal(_n):
     else:
         oracle = html.Div("Not enough history for oracle yet.", className="text-muted")
 
-    return media_fig, circadian_fig, social_fig, intent_fig, oracle
+    # Fractal life figure
+    fractal_fig = _build_fractal_fig(*_fetch_fractal_data(window))
+
+    return media_fig, circadian_fig, social_fig, intent_fig, oracle, fractal_fig
 
 
 @callback(
@@ -332,4 +450,63 @@ def generate_story(_n):
     art_fig.update_layout(template="plotly_dark", height=420)
 
     return html.Ul([html.Li(line) for line in story_lines]), art_fig
+
+
+@callback(
+    Output("li-fractal-narrative", "children"),
+    Output("li-fractal-window", "data"),
+    Input("li-fractal", "clickData"),
+    Input("li-fractal", "relayoutData"),
+    State("li-fractal-window", "data"),
+    prevent_initial_call=True,
+)
+def update_fractal_narrative(click_data, relayout_data, window):
+    # Handle zoom window from double-click or range selection
+    if relayout_data and "xaxis.range[0]" in relayout_data and "xaxis.range[1]" in relayout_data:
+        try:
+            start = dt.datetime.fromisoformat(relayout_data["xaxis.range[0]"]).timestamp()
+            end = dt.datetime.fromisoformat(relayout_data["xaxis.range[1]"]).timestamp()
+            window = (start, end)
+        except Exception:
+            pass
+    elif relayout_data and ("xaxis.autorange" in relayout_data or relayout_data.get("autosize")):
+        window = None
+
+    if not click_data:
+        return html.Div("Click a point to see its story."), window
+
+    pt = click_data["points"][0]
+    ts = pt["x"]
+    hce = pt.get("y")
+    cd = pt.get("customdata") or [None, None]
+    x_val, q_slope = cd[0], cd[1]
+    text = [
+        f"Time: {ts}",
+        f"HCE: {hce:.2f}" if hce is not None else "HCE: n/a",
+        f"X: {x_val:.3f}" if x_val is not None else "X: n/a",
+        f"Q_slope: {q_slope:.3f}" if q_slope is not None else "Q_slope: n/a",
+    ]
+    return html.Ul([html.Li(t) for t in text]), window
+
+
+@callback(
+    Output("li-export", "data"),
+    Input("li-export-btn", "n_clicks"),
+    State("li-fractal", "figure"),
+    State("li-fractal-narrative", "children"),
+    prevent_initial_call=True,
+)
+def export_chapter(n, fig_dict, narrative):
+    if not n:
+        raise dash.exceptions.PreventUpdate  # type: ignore
+    try:
+        fig = go.Figure(fig_dict)
+        pdf_bytes = fig.to_image(format="pdf", height=800, width=1200)
+    except Exception:
+        # Fallback to PNG if pdf unavailable
+        pdf_bytes = fig.to_image(format="png", height=800, width=1200)
+    buf = io.BytesIO()
+    buf.write(pdf_bytes)
+    buf.seek(0)
+    return dcc.send_bytes(lambda _: buf.read(), "chapter_of_the_soul.pdf")
 

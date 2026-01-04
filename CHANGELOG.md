@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.2 — Oracle voice + fractal chronicles + forecasting
+- Oracle UI: fixed right overlay restored; added mic (SpeechRecognition) and TTS (SpeechSynthesis) with Speak/Read toggles; 90s Ollama timeout; wider panel kept.
+- Pattern revelation: Oracle prompt now embeds social/activity/mood/media correlations and intention payoff deltas from history; includes forecast snapshot.
+- Lite forecasting: p90-based transcendence likelihood (1/3/6h), strain risk, media lift prob; banner + Oracle context.
+- Fractal Life Chronicles: new interactive timeline in Longitudinal Insights (Scattergl HCE vs time, size std_Q, color X, events overlay, zoom/drill) with PDF export “Chapter of the Soul.”
+- Spotify logging: auto-start waits for session_id, forces immediate poll so current track is fresh for Oracle.
+
 ## v0.7.1 — Oracle prompt hardening + layout polish
 - Oracle prompt: shifted to a neutral, analytical, evidence-based system voice; draws solely from the canonical master document for context.
 - Canonical doc path fix: ensured the master document under `docs/` is loaded reliably; warning only if unreadable.

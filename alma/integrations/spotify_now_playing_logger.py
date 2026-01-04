@@ -58,6 +58,14 @@ class SpotifyNowPlayingLogger:
             self._current_track_id = None
             self._current_start_ts = None
 
+    def force_poll(self) -> None:
+        """Run one poll immediately to refresh latest/NDJSON without waiting for thread loop."""
+        try:
+            self._poll_once()
+        except Exception:
+            # best-effort; ignore to keep UI responsive
+            pass
+
     def get_latest(self) -> Optional[Dict[str, object]]:
         with self._lock:
             return dict(self._latest) if self._latest else None

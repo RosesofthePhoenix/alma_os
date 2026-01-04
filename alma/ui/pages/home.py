@@ -378,6 +378,17 @@ def update_home_status(
 
     ndjson_state = bool(ndjson_enabled)
 
+    # Auto-start Spotify logging once session_id is available, then force an immediate poll
+    try:
+        if session_id and not (spotify_logger.status().get("running")):
+            spotify_logger.start(session_id=session_id)
+            spotify_logger.force_poll()
+        # If running but no latest yet, nudge a poll
+        if session_id and spotify_logger.status().get("running") and not spotify_logger.status().get("latest"):
+            spotify_logger.force_poll()
+    except Exception:
+        pass
+
     if triggered == "home-start-engine-btn":
         try:
             engine.start()
@@ -401,7 +412,9 @@ def update_home_status(
         engine.set_emit_ndjson(ndjson_state)
     elif triggered == "home-start-spotify-btn":
         session_id = engine.get_session_id()
-        spotify_logger.start(session_id=session_id)
+        if session_id:
+            spotify_logger.start(session_id=session_id)
+            spotify_logger.force_poll()
     elif triggered == "home-stop-spotify-btn":
         spotify_logger.stop()
     elif triggered == "home-bookmark-btn":

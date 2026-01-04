@@ -36,10 +36,12 @@ If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
   - Memory: similarity search with HCE weighting; quick captures list; TRANSCENDENT filter.
   - Spotify Resonance: visuals first (HCE histogram, top artists by HCE, bar/scatter, timeline, correlation heatmap, findings), Top 20 table at bottom; backfills missing means; suggested next track banner; relax-inducing tracks section.
   - Longitudinal Insights: media alchemy (HCE lift), circadian map, social vs solitary harmony, intention-outcome loops, “state story” generator with data-art scatter.
-- Oracle (Phase 7, v0.7.1): collapsible right sidebar using local Ollama (`huihui_ai/dolphin3-abliterated`) for state-aware guidance and narratives; 60s timeout + retry/backoff; system prompt now uses a neutral, analytical, evidence-based voice and pulls the canonical master document from `docs/`; panel widened (~1080px, 90vw max) for readability; prefers current-track context and avoids repeating historical tracks unless relevant.
+- Oracle (Phase 7, v0.7.2): fixed-right overlay using local Ollama (`huihui_ai/dolphin3-abliterated`) with 90s timeout + retries; neutral, analytical system prompt with canonical doc; mic (browser SpeechRecognition) and TTS (SpeechSynthesis) toggles; patterns (social/activity/mood/media, intention payoff) and lite forecast (p90 transcendence/strain/media) fed into responses.
 - Turrell Room:
   - Runner launches `external/xq_turrell_room_2d_v6_hce.py` (HCE-enhanced); HUD/text fallback (SysFont→freetype→pixel), hotkeys logged (H, 0–3, F, ESC double-press), display retry, NDJSON follower tolerant to truncation; display selection (Primary/External) persisted.
   - v5_3 style script kept for reference; v6 is the active target.
+
+- Longitudinal: adds Fractal Life Chronicles (interactive Scattergl: time vs HCE, size std_Q, color X, event overlays, zoom/rangeslider, PDF export “Chapter of the Soul”); media alchemy, circadian map, social vs solitary, intention loops, story art remain.
 
 ## Paths and runtime files
 - NDJSON stream: `sessions/current/state_stream.ndjson`
@@ -54,6 +56,8 @@ Uses cached token under project root (`.cache`). If needed:
 ```
 export SPOTIPY_CACHE="/Users/raycraigantelo/Documents/alma_os/.cache"
 ```
+
+- Auto-start: logger now waits for a valid session_id, starts, and forces an immediate poll so the current track is fresh (Oracle sees the live track without manual restart).
 
 ## Turrell notes
 Start from Environment page (NDJSON must be ON). Runner passes ndjson/mode paths, HUD on, quality preset, display, q-metric. Hotkeys: 0–3 modes, H HUD, F fullscreen, ESC quit (double press), V/M cycle Q source/metric where applicable.
