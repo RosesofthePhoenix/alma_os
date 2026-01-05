@@ -1,7 +1,7 @@
 from dash import Input, Output
 import dash_bootstrap_components as dbc
 
-from . import home, neurometrics, readiness, scheduler, memory, environment, recipes, settings, spotify_resonance, longitudinal
+from . import home, neurometrics, readiness, scheduler, memory, environment, recipes, settings, spotify_resonance, longitudinal, media_alchemy
 
 
 PAGES = [
@@ -11,6 +11,7 @@ PAGES = [
     {"name": "Scheduler", "path": "/scheduler", "layout": scheduler.layout},
     {"name": "Memory", "path": "/memory", "layout": memory.layout},
     {"name": "Spotify Resonance", "path": "/spotify", "layout": spotify_resonance.layout},
+    {"name": "Media Alchemy", "path": "/media_alchemy", "layout": media_alchemy.layout},
     {"name": "Longitudinal Insights", "path": "/insights", "layout": longitudinal.layout},
     {"name": "Environment", "path": "/environment", "layout": environment.layout},
     {"name": "Recipes", "path": "/recipes", "layout": recipes.layout},

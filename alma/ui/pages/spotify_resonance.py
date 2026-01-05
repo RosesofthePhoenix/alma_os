@@ -1,14 +1,17 @@
 import datetime as dt
 import sqlite3
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import dash_bootstrap_components as dbc
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+import plotly.io as pio
 from dash import Input, Output, State, callback, dcc, html
 
 from alma import config
+from alma.engine import storage
 
 
 def _fetch_track_sessions(limit: int = 200) -> pd.DataFrame:
@@ -36,6 +39,19 @@ def _fetch_track_sessions(limit: int = 200) -> pd.DataFrame:
                 conn,
                 params=(limit,),
             )
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def _fetch_track_sections(track_id: str, limit_sessions: int = 1) -> pd.DataFrame:
+    try:
+        rows = storage.list_track_sections(track_id, limit_sessions=limit_sessions)
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df["section_rel_start"] = df["section_start_ts"] - df["start_ts"]
+        df["section_rel_end"] = df["section_end_ts"] - df["start_ts"]
         return df
     except Exception:
         return pd.DataFrame()
@@ -256,6 +272,23 @@ layout = dbc.Container(
                             ],
                             className="g-3 mb-3",
                         ),
+        dbc.Row(
+            [
+                dbc.Col(dcc.Graph(id="sr-top-sections"), md=12, sm=12),
+            ],
+            className="g-3 mb-3",
+        ),
+                        dbc.Card(
+                            dbc.CardBody(
+                                [
+                                    html.Div("Intra-Track Analysis", className="fw-bold mb-2"),
+                                    dcc.Dropdown(id="sr-track-select", placeholder="Select a track", className="mb-2"),
+                                    dcc.Graph(id="sr-track-sections"),
+                                    html.Div(id="sr-track-table", className="mt-2"),
+                                ]
+                            ),
+                            className="page-card mb-3",
+                        ),
                         dbc.Row(
                             [
                                 dbc.Col(
@@ -314,11 +347,14 @@ layout = dbc.Container(
     Output("sr-scatter", "figure"),
     Output("sr-timeline", "figure"),
     Output("sr-corr", "figure"),
+    Output("sr-top-sections", "figure"),
     Output("sr-findings", "children"),
     Output("sr-top-table", "children"),
     Output("sr-suggestion", "children"),
     Output("sr-relax-table", "children"),
     Output("sr-relax-bar", "figure"),
+    Output("sr-track-select", "options"),
+    Output("sr-track-select", "value"),
     Input("sr-interval", "n_intervals"),
     Input("sr-thr", "value"),
 )
@@ -444,6 +480,24 @@ def update_resonance(_n, thr):
     )
     corr_fig.update_layout(template="plotly_dark", height=320)
 
+    # Top sections across history
+    sec_rows = storage.list_top_sections(limit=10)
+    if sec_rows:
+        sec_df = pd.DataFrame(sec_rows)
+        top_sec_fig = px.bar(
+            sec_df,
+            x="avg_hce",
+            y="section_label",
+            color="plays",
+            orientation="h",
+            title="Top sections by avg HCE",
+            labels={"avg_hce": "avg HCE", "section_label": "Section", "plays": "plays"},
+        )
+        top_sec_fig.update_layout(template="plotly_dark", height=360)
+    else:
+        top_sec_fig = px.bar(title="Top sections by avg HCE")
+        top_sec_fig.update_layout(template="plotly_dark", height=360)
+
     # Findings
     if agg.empty:
         findings = "No track sessions yet."
@@ -477,6 +531,8 @@ def update_resonance(_n, thr):
         relax_bar = px.bar(title="Top relaxation inducers (consistency)")
         relax_bar.update_layout(template="plotly_dark", height=400)
 
+    options = [{"label": f"{r['title']} — {r['artist']}", "value": r["track_id"]} for _, r in df.head(50).iterrows()] if not df.empty else []
+
     return (
         hist_fig,
         artist_fig,
@@ -484,10 +540,129 @@ def update_resonance(_n, thr):
         scatter_fig,
         tl_fig,
         corr_fig,
+        top_sec_fig,
         findings,
         table,
         suggestion,
         relax_table,
         relax_bar,
+        options,
+        (options[0]["value"] if options else None),
     )
+
+
+@callback(
+    Output("sr-track-sections", "figure"),
+    Output("sr-track-table", "children"),
+    Input("sr-track-select", "value"),
+    prevent_initial_call=False,
+)
+def render_sr_track_sections(track_id):
+    if not track_id:
+        return go.Figure(), html.Div("Select a track to view sections.")
+    df = _fetch_track_sections(track_id)
+    if df.empty:
+        return go.Figure(), html.Div("No section data yet (playback or analysis needed).")
+    first_session = df["track_session_id"].iloc[0]
+    df = df[df["track_session_id"] == first_session]
+    avg_hce = df["mean_HCE"].mean() if not df.empty else 0.0
+    fig = go.Figure()
+    # Placeholder waveform-style backdrop
+    try:
+        max_rel = df["section_rel_end"].max()
+    except Exception:
+        max_rel = 0
+    t = np.linspace(0, max(max_rel, 1.0), num=300)
+    waveform = 0.6 * np.sin(2 * np.pi * t / max(max_rel, 1.0) * 3) + 0.25 * np.sin(2 * np.pi * t / max(max_rel, 1.0) * 7)
+    fig.add_trace(
+        go.Scatter(
+            x=t,
+            y=waveform,
+            mode="lines",
+            line=dict(color="rgba(120,120,120,0.15)"),
+            name="waveform",
+            hoverinfo="skip",
+        )
+    )
+    # vrects for sections
+    for _, r in df.iterrows():
+        fig.add_vrect(
+            x0=r["section_rel_start"],
+            x1=r["section_rel_end"],
+            fillcolor="#333",
+            opacity=0.08,
+            line_width=0,
+            annotation_text=r.get("section_label", ""),
+            annotation_position="top left",
+        )
+    # HCE line
+    fig.add_trace(
+        go.Scatter(
+            x=df["section_rel_start"],
+            y=df["mean_HCE"],
+            mode="lines+markers",
+            line=dict(color="#d7b34d", width=3),
+            marker=dict(size=10, color=df["mean_Q"], colorscale="Plasma", showscale=True, colorbar=dict(title="Q")),
+            name="HCE",
+            hovertext=[
+                f"{lbl}: HCE {h:.2f}, lift {h-avg_hce:+.2f}, X {x:.3f}, Q {q:.3f}"
+                for lbl, h, x, q in zip(df["section_label"], df["mean_HCE"], df["mean_X"], df["mean_Q"])
+            ],
+        )
+    )
+    # Q fill
+    fig.add_trace(
+        go.Scatter(
+            x=df["section_rel_start"],
+            y=df["mean_Q"],
+            mode="lines",
+            line=dict(color="rgba(80,180,255,0.4)"),
+            fill="tozeroy",
+            name="Q",
+        )
+    )
+    # X background
+    fig.add_trace(
+        go.Scatter(
+            x=df["section_rel_start"],
+            y=df["mean_X"],
+            mode="lines",
+            line=dict(color="rgba(150,150,150,0.3)", dash="dot"),
+            name="X",
+        )
+    )
+    fig.update_layout(
+        template="plotly_dark",
+        title="Intra-Track Sections — HCE/Q/X",
+        xaxis_title="Seconds (relative)",
+        yaxis_title="mean_HCE",
+        height=420,
+    )
+    table = dbc.Table(
+        [
+            html.Thead(html.Tr([html.Th("Section"), html.Th("Start (s)"), html.Th("End (s)"), html.Th("HCE"), html.Th("Lift vs avg"), html.Th("Q"), html.Th("X")])),
+            html.Tbody(
+                [
+                    html.Tr(
+                        [
+                            html.Td(r.get("section_label")),
+                            html.Td(f"{r.get('section_rel_start',0):.1f}"),
+                            html.Td(f"{r.get('section_rel_end',0):.1f}"),
+                            html.Td(f"{r.get('mean_HCE',0):.2f}"),
+                            html.Td(f"{(r.get('mean_HCE',0)-avg_hce):+.2f}"),
+                            html.Td(f"{r.get('mean_Q',0):.3f}"),
+                            html.Td(f"{r.get('mean_X',0):.3f}"),
+                        ]
+                    )
+                    for _, r in df.iterrows()
+                ]
+            ),
+        ],
+        striped=True,
+        bordered=False,
+        hover=True,
+        size="sm",
+        className="mt-2",
+    )
+    return fig, table
 

@@ -6,7 +6,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from spotipy import Spotify, SpotifyException
 from spotipy.oauth2 import SpotifyOAuth
@@ -29,6 +29,7 @@ class SpotifyNowPlayingLogger:
         self._current_track_id: Optional[str] = None
         self._current_start_ts: Optional[float] = None
         self._last_update_ts: float = 0.0
+        self._analysis_cache: Dict[str, dict] = {}
 
     def start(self, session_id: Optional[str]) -> None:
         with self._lock:
@@ -267,6 +268,8 @@ class SpotifyNowPlayingLogger:
             self._current_track_id = track_id
             self._current_start_ts = now_ts
             self._last_update_ts = now_ts
+            # fetch audio analysis lazily
+            self._maybe_fetch_analysis(track_id)
             return
 
         # Periodic metric update while playing
@@ -277,10 +280,74 @@ class SpotifyNowPlayingLogger:
     def _finalize_current(self, end_ts: float) -> None:
         if self._current_track_session_id:
             storage.update_track_session_metrics(self._current_track_session_id, end_ts=end_ts)
+            # section-level metrics
+            try:
+                self._compute_sections(self._current_track_session_id, end_ts)
+            except Exception:
+                pass
         self._current_track_session_id = None
         self._current_track_id = None
         self._current_start_ts = None
         self._last_update_ts = 0.0
+
+    def _maybe_fetch_analysis(self, track_id: str) -> None:
+        if track_id in self._analysis_cache:
+            return
+        creds = self._load_creds()
+        if not creds:
+            return
+        auth = SpotifyOAuth(
+            client_id=creds["client_id"],
+            client_secret=creds["client_secret"],
+            redirect_uri=creds["redirect_uri"],
+            scope="user-read-playback-state user-read-currently-playing",
+            open_browser=False,
+        )
+        sp = Spotify(auth_manager=auth)
+        try:
+            analysis = sp.audio_analysis(track_id)
+            self._analysis_cache[track_id] = analysis
+        except Exception:
+            self._analysis_cache[track_id] = {}
+
+    def _compute_sections(self, track_session_id: int, end_ts: float) -> None:
+        if not self._current_start_ts or not self._current_track_id:
+            return
+        start_ts = self._current_start_ts
+        track_id = self._current_track_id
+        title = ""
+        artist = ""
+        analysis = self._analysis_cache.get(track_id) or {}
+        sections = []
+        sec_data = analysis.get("sections") or []
+        if sec_data:
+            for idx, sec in enumerate(sec_data):
+                s = sec.get("start", 0.0)
+                d = sec.get("duration", 0.0)
+                sections.append((idx, f"Section {idx+1}", s, s + d))
+        else:
+            # fallback thirds
+            total = max(end_ts - start_ts, 1.0)
+            step = total / 3.0
+            sections = [(i, f"Part {i+1}", i * step, (i + 1) * step) for i in range(3)]
+
+        rows = []
+        for idx, label, rel_start, rel_end in sections:
+            abs_start = start_ts + rel_start
+            abs_end = start_ts + rel_end
+            means = storage._compute_means_for_window(abs_start, abs_end, session_id=self._session_id)
+            rows.append(
+                {
+                    "idx": idx,
+                    "label": label,
+                    "start_ts": abs_start,
+                    "end_ts": abs_end,
+                    "mean_HCE": means.get("mean_HCE", 0.0),
+                    "mean_Q": means.get("mean_Q", 0.0),
+                    "mean_X": means.get("mean_X", 0.0),
+                }
+            )
+        storage.upsert_track_sections(track_session_id, track_id, title, artist, rows)
 
 
 __all__ = ["SpotifyNowPlayingLogger"]

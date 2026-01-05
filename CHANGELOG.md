@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.3 — Intra-track resonance & media alchemy
+- Media Alchemy page: standalone tab with waveform-style intra-track view (section vrects, gold HCE line, Q fill, X line, lift vs track avg) and per-section table.
+- Spotify Resonance: intra-track card also gains waveform backdrop; added top sections-by-HCE chart.
+- Oracle: includes richer section summaries (best + top 3 sections) in prompt context for current-track queries.
+- Home: mini-view progress bar shows current track section + HCE.
+- Storage: new `track_sections` table plus aggregate “top sections” retrieval.
+
 ## v0.7.2 — Oracle voice + fractal chronicles + forecasting
 - Oracle UI: fixed right overlay restored; added mic (SpeechRecognition) and TTS (SpeechSynthesis) with Speak/Read toggles; 90s Ollama timeout; wider panel kept.
 - Pattern revelation: Oracle prompt now embeds social/activity/mood/media correlations and intention payoff deltas from history; includes forecast snapshot.

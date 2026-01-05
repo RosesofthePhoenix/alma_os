@@ -139,6 +139,20 @@ controls_card = dbc.Card(
                     ],
                     className="g-2 mt-2",
                 ),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                html.Div("Current track section", className="status-label"),
+                                dbc.Progress(id="home-track-progress", striped=True, animated=True, value=0, max=100, color="warning", className="mb-1"),
+                                html.Div(id="home-track-section", className="small text-muted"),
+                            ],
+                            md=12,
+                            sm=12,
+                        )
+                    ],
+                    className="g-2 mt-2",
+                ),
                 html.Div(id="home-muse-error", className="text-danger small mt-2"),
                 html.Hr(),
                 dbc.Row(
@@ -310,6 +324,8 @@ layout = dbc.Container(
     Output("home-toggle-ndjson-btn", "color"),
     Output("ndjson-emit-store", "data"),
     Output("home-muse-address", "value"),
+    Output("home-track-progress", "value"),
+    Output("home-track-section", "children"),
     Input("home-status-interval", "n_intervals"),
     Input("home-start-engine-btn", "n_clicks"),
     Input("home-stop-engine-btn", "n_clicks"),
@@ -579,6 +595,30 @@ def update_home_status(
     ndjson_color = "success" if ndjson_state else "secondary"
     address_value = (muse_address or profile_address or "").strip()
 
+    track_progress = 0
+    track_section = "No track"
+    try:
+        if latest_play and latest_play.get("duration_ms"):
+            prog = latest_play.get("progress_ms") or 0
+            dur = max(latest_play.get("duration_ms") or 1, 1)
+            track_progress = max(0, min(100, (prog / dur) * 100))
+            track_id = latest_play.get("track_id")
+            if track_id:
+                secs = storage.list_track_sections(track_id, limit_sessions=1)
+                if secs:
+                    current_sec = None
+                    for s in secs:
+                        rel_start = (s.get("section_start_ts", 0) - s.get("start_ts", 0)) if s.get("start_ts") is not None else 0
+                        rel_end = (s.get("section_end_ts", 0) - s.get("start_ts", 0)) if s.get("start_ts") is not None else 0
+                        if (prog / 1000.0) >= rel_start and (prog / 1000.0) <= rel_end:
+                            current_sec = s
+                            break
+                    if current_sec is None:
+                        current_sec = secs[0]
+                    track_section = f"{current_sec.get('section_label','Section')} — HCE {float(current_sec.get('mean_HCE') or 0):.2f}"
+    except Exception:
+        pass
+
     return (
         lsl_dot_class,
         lsl_status_text,
@@ -601,6 +641,8 @@ def update_home_status(
         ndjson_color,
         ndjson_state,
         address_value,
+        track_progress,
+        track_section,
     )
 
 

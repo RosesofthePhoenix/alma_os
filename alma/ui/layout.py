@@ -807,12 +807,37 @@ def _oracle_context():
         latest_track = storage.get_latest_spotify(session_id=None)
         if latest_track and latest_track.get("track_name"):
             ctx["current_track"] = f"{latest_track.get('track_name','?')} — {latest_track.get('artists','?')}"
+            ctx["current_track_id"] = latest_track.get("track_id")
+            ctx["current_progress_ms"] = latest_track.get("progress_ms")
     except Exception:
         pass
     # Forecast snapshot
     ctx["forecast"] = _forecast_probabilities()
     # Patterns / intentions
     ctx["patterns"] = _pattern_revelations()
+    # Section summary
+    try:
+        tid = ctx.get("current_track_id")
+        if tid:
+            secs = storage.list_track_sections(tid, limit_sessions=1)
+            if secs:
+                best = max(secs, key=lambda s: s.get("mean_HCE") or 0.0)
+                ctx["section_summary"] = {
+                    "label": best.get("section_label"),
+                    "mean_HCE": best.get("mean_HCE"),
+                    "mean_Q": best.get("mean_Q"),
+                    "mean_X": best.get("mean_X"),
+                }
+                ctx["section_top3"] = [
+                    {
+                        "label": s.get("section_label"),
+                        "mean_HCE": s.get("mean_HCE"),
+                        "lift": None,
+                    }
+                    for s in sorted(secs, key=lambda s: s.get("mean_HCE") or 0.0, reverse=True)[:3]
+                ]
+    except Exception:
+        pass
     return ctx
 
 
@@ -847,6 +872,19 @@ def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
         pattern_lines.append(f"Intention payoff: \"{inten}\" → HCE Δ {delta:.2f}.")
     patterns_txt = "\n".join(pattern_lines) if pattern_lines else "No strong patterns yet."
 
+    section_lines = []
+    section_summary = ctx.get("section_summary") or {}
+    if section_summary:
+        section_lines.append(
+            f"Best section: {section_summary.get('label','?')} "
+            f"(HCE {section_summary.get('mean_HCE',0):.2f}, Q {section_summary.get('mean_Q',0):.3f}, X {section_summary.get('mean_X',0):.3f})."
+        )
+    top3 = ctx.get("section_top3") or []
+    if top3:
+        for s in top3:
+            section_lines.append(f"{s.get('label')}: HCE {s.get('mean_HCE',0):.2f}")
+    sections_txt = "\n".join(section_lines) if section_lines else "Sections: n/a"
+
     forecast = ctx.get("forecast") or {}
     forecast_lines = []
     p90 = forecast.get("p90")
@@ -865,11 +903,20 @@ def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
         forecast_lines.append(f"Media lift prob: {media*100:.1f}%")
     forecast_txt = "\n".join(forecast_lines) if forecast_lines else "Forecast: n/a"
 
+    section = ctx.get("section_summary") or {}
+    section_txt = ""
+    if section:
+        section_txt = (
+            f"Section highlight: {section.get('label','?')} "
+            f"(HCE {section.get('mean_HCE',0):.2f}, Q {section.get('mean_Q',0):.3f}, X {section.get('mean_X',0):.3f})"
+        )
+
     base_prompt = (
         f"{ORACLE_SYSTEM_PREFIX}\n\n"
         f"Mode: {mode}\n"
         f"Current context: {metrics}\n\n"
         f"Patterns:\n{patterns_txt}\n\n"
+        f"Sections:\n{sections_txt}\n\n"
         f"Forecast:\n{forecast_txt}\n\n"
         f"User query: {user_text}\n"
         "Respond with analytical insights and actionable recommendations only."

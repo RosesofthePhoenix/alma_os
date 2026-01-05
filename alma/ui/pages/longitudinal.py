@@ -13,6 +13,7 @@ import plotly.io as pio
 from dash import Input, Output, State, callback, ctx, dcc, html
 
 from alma import config
+from alma.engine import storage
 
 
 def _fetch_buckets() -> pd.DataFrame:
@@ -59,6 +60,19 @@ def _fetch_tracks(limit: int = 200) -> pd.DataFrame:
                 conn,
                 params=(limit,),
             )
+    except Exception:
+        return pd.DataFrame()
+
+
+def _fetch_track_sections(track_id: str) -> pd.DataFrame:
+    try:
+        rows = storage.list_track_sections(track_id, limit_sessions=1)
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df["section_rel_start"] = df["section_start_ts"] - df["start_ts"]
+        df["section_rel_end"] = df["section_end_ts"] - df["start_ts"]
+        return df
     except Exception:
         return pd.DataFrame()
 
@@ -278,6 +292,17 @@ layout = dbc.Container(
                         dbc.Card(
                             dbc.CardBody(
                                 [
+                                    html.Div("Intra-Track Analysis", className="fw-bold mb-2"),
+                                    dcc.Dropdown(id="li-track-select", placeholder="Select a track for section analysis"),
+                                    dcc.Graph(id="li-track-sections"),
+                                    html.Div(id="li-track-table", className="mt-2"),
+                                ]
+                            ),
+                            className="page-card mb-3",
+                        ),
+                        dbc.Card(
+                            dbc.CardBody(
+                                [
                                     html.Div("Oracle", className="fw-bold mb-2"),
                                     html.Div(id="li-oracle"),
                                     dbc.Button("Generate State Story", id="li-story-btn", color="info", size="sm", className="mt-2"),
@@ -307,6 +332,8 @@ layout = dbc.Container(
     Output("li-intentions", "figure"),
     Output("li-oracle", "children"),
     Output("li-fractal", "figure"),
+    Output("li-track-select", "options"),
+    Output("li-track-select", "value"),
     Input("li-interval", "n_intervals"),
     Input("li-fractal-window", "data"),
 )
@@ -314,6 +341,7 @@ def update_longitudinal(_n, window):
     buckets = _fetch_buckets()
     events = _fetch_events()
     tracks = _fetch_tracks()
+    track_options = [{"label": f"{r['title']} — {r['artist']}", "value": r["track_id"]} for _, r in tracks.head(50).iterrows()] if not tracks.empty else []
 
     # Media alchemy
     media_df = _media_alchemy(tracks, buckets)
@@ -387,7 +415,16 @@ def update_longitudinal(_n, window):
     # Fractal life figure
     fractal_fig = _build_fractal_fig(*_fetch_fractal_data(window))
 
-    return media_fig, circadian_fig, social_fig, intent_fig, oracle, fractal_fig
+    return (
+        media_fig,
+        circadian_fig,
+        social_fig,
+        intent_fig,
+        oracle,
+        fractal_fig,
+        track_options,
+        (track_options[0]["value"] if track_options else None),
+    )
 
 
 @callback(
@@ -509,4 +546,65 @@ def export_chapter(n, fig_dict, narrative):
     buf.write(pdf_bytes)
     buf.seek(0)
     return dcc.send_bytes(lambda _: buf.read(), "chapter_of_the_soul.pdf")
+
+
+@callback(
+    Output("li-track-sections", "figure"),
+    Output("li-track-table", "children"),
+    Input("li-track-select", "value"),
+    prevent_initial_call=False,
+)
+def render_track_sections(track_id):
+    if not track_id:
+        return go.Figure(), html.Div("Select a track to view sections.")
+    df = _fetch_track_sections(track_id)
+    if df.empty:
+        return go.Figure(), html.Div("No section data yet (playback or analysis needed).")
+    first_session = df["track_session_id"].iloc[0]
+    df = df[df["track_session_id"] == first_session]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=df["section_rel_start"],
+            y=df["mean_HCE"],
+            mode="markers+lines",
+            marker=dict(size=10, color=df["mean_Q"], colorscale="Plasma", showscale=True, colorbar=dict(title="Q")),
+            name="HCE",
+            hovertext=[f"{lbl}: HCE {h:.2f}, X {x:.3f}, Q {q:.3f}" for lbl, h, x, q in zip(df["section_label"], df["mean_HCE"], df["mean_X"], df["mean_Q"])],
+        )
+    )
+    for _, r in df.iterrows():
+        fig.add_vrect(x0=r["section_rel_start"], x1=r["section_rel_end"], fillcolor="#444", opacity=0.1, line_width=0)
+    fig.update_layout(
+        template="plotly_dark",
+        title="Intra-Track HCE by Section",
+        xaxis_title="Seconds (relative)",
+        yaxis_title="mean_HCE",
+    )
+    table = dbc.Table(
+        [
+            html.Thead(html.Tr([html.Th("Section"), html.Th("Start (s)"), html.Th("End (s)"), html.Th("HCE"), html.Th("Q"), html.Th("X")])),
+            html.Tbody(
+                [
+                    html.Tr(
+                        [
+                            html.Td(r.get("section_label")),
+                            html.Td(f"{r.get('section_rel_start',0):.1f}"),
+                            html.Td(f"{r.get('section_rel_end',0):.1f}"),
+                            html.Td(f"{r.get('mean_HCE',0):.2f}"),
+                            html.Td(f"{r.get('mean_Q',0):.3f}"),
+                            html.Td(f"{r.get('mean_X',0):.3f}"),
+                        ]
+                    )
+                    for _, r in df.iterrows()
+                ]
+            ),
+        ],
+        striped=True,
+        bordered=False,
+        hover=True,
+        size="sm",
+        className="mt-2",
+    )
+    return fig, table
 

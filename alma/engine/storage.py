@@ -131,6 +131,24 @@ def init_db() -> None:
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS track_sections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_session_id INTEGER,
+                track_id TEXT,
+                title TEXT,
+                artist TEXT,
+                section_index INTEGER,
+                section_label TEXT,
+                start_ts REAL,
+                end_ts REAL,
+                mean_HCE REAL,
+                mean_Q REAL,
+                mean_X REAL
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS recipes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT,
@@ -584,6 +602,93 @@ def update_track_session_metrics(track_session_id: int, end_ts: float) -> None:
             (end_ts, means["mean_HCE"], means["mean_Q"], means["mean_X"], track_session_id),
         )
         conn.commit()
+
+
+def upsert_track_sections(track_session_id: int, track_id: str, title: str, artist: str, sections: List[Dict[str, float]]) -> None:
+    """Persist per-section metrics for a track session."""
+    if not sections:
+        return
+    with _connect() as conn:
+        conn.execute("DELETE FROM track_sections WHERE track_session_id=?", (track_session_id,))
+        conn.executemany(
+            """
+            INSERT INTO track_sections (track_session_id, track_id, title, artist, section_index, section_label, start_ts, end_ts, mean_HCE, mean_Q, mean_X)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    track_session_id,
+                    track_id,
+                    title,
+                    artist,
+                    int(s.get("idx", 0)),
+                    s.get("label") or f"Section {s.get('idx', 0)}",
+                    float(s.get("start_ts", 0.0)),
+                    float(s.get("end_ts", 0.0)),
+                    float(s.get("mean_HCE", 0.0)),
+                    float(s.get("mean_Q", 0.0)),
+                    float(s.get("mean_X", 0.0)),
+                )
+                for s in sections
+            ],
+        )
+        conn.commit()
+
+
+def list_track_sections(track_id: str, limit_sessions: int = 1) -> List[Dict[str, object]]:
+    """Fetch latest sections for a track (most recent sessions)."""
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT ts.id AS track_session_id, ts.title, ts.artist, ts.start_ts, ts.end_ts, sec.section_index,
+                   sec.section_label, sec.start_ts AS section_start_ts, sec.end_ts AS section_end_ts,
+                   sec.mean_HCE, sec.mean_Q, sec.mean_X
+            FROM track_sessions ts
+            JOIN track_sections sec ON ts.id = sec.track_session_id
+            WHERE ts.track_id = ?
+            ORDER BY ts.start_ts DESC, sec.section_index ASC
+            """,
+            (track_id,),
+        )
+        rows = _rows_to_dicts(cur)
+        if not rows:
+            return []
+        # limit sessions by unique track_session_id
+        seen = set()
+        limited = []
+        for r in rows:
+            tsid = r.get("track_session_id")
+            if len(seen) >= limit_sessions and tsid not in seen:
+                continue
+            seen.add(tsid)
+            limited.append(r)
+        return limited
+
+
+def list_top_sections(limit: int = 10) -> List[Dict[str, object]]:
+    """Aggregate top-performing sections across history."""
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT section_label,
+                   AVG(mean_HCE) AS avg_hce,
+                   AVG(mean_Q) AS avg_q,
+                   AVG(mean_X) AS avg_x,
+                   COUNT(*) AS plays
+            FROM track_sections
+            GROUP BY section_label
+            ORDER BY avg_hce DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = _rows_to_dicts(cur)
+        for r in rows:
+            r["avg_hce"] = float(r.get("avg_hce") or 0.0)
+            r["avg_q"] = float(r.get("avg_q") or 0.0)
+            r["avg_x"] = float(r.get("avg_x") or 0.0)
+            r["plays"] = int(r.get("plays") or 0)
+        return rows
 
 
 def list_top_tracks(limit: int = 10, offset: int = 0) -> List[Dict[str, object]]:
