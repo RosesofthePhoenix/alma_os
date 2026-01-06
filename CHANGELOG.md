@@ -2,6 +2,11 @@
 
 # Changelog
 
+## v0.7.5 — Real-time intra-track stabilization
+- Buckets now roll every ~15s (0.25 min) and carry `track_uri` + `relative_seconds` for precise playback alignment; per-bucket debug logs show tagging.
+- Media Alchemy live mapping uses the tagged buckets, fills within seconds, and guards binning to avoid IndexError on replays/offset drift.
+- Table and waveform stay in sync: live + historical per-second HCE blend, section bins use real means/lifts, early playback shows “resonance building” instead of zeros.
+
 ## v0.7.4 — Live per-second resonance + Home now-playing
 - Media Alchemy: true per-second gold HCE waveform with live + historical blend; live buckets aligned to playback start; section glow and progress line; table now bins live/historical seconds into 5 parts with real means, colored lifts, and granular notes (no uniform fallback while live).
 - Spotify logger: track_session start timestamp aligned to playback progress for accurate bucket offsets; mapping debug logs.

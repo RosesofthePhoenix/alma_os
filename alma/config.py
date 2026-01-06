@@ -21,7 +21,8 @@ BASELINE_DEFAULT_PATH = BASELINES_DIR / "baseline_global_muse_v1_revised.json"
 # Defaults
 CANONICAL_Q: str = "vibe_focus"
 NEUROMETRICS_Q_OPTIONS: List[str] = ["vibe_focus", "vibe", "abs", "vibe_focus_e"]
-BUCKET_MINUTES_DEFAULT: int = 10
+# Shorter buckets to allow near real-time intra-track mapping
+BUCKET_MINUTES_DEFAULT: float = 0.25  # 15 seconds
 MIN_VALID_FRACTION_FOR_LABEL: float = 0.6
 
 

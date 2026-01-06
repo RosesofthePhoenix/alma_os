@@ -290,38 +290,50 @@ def _historical_hce_series(track_id: str, bin_sec: float = 1.0, max_sessions: in
     ts = np.arange(0, max_idx * bin_sec, bin_sec)
     vals = np.full_like(ts, np.nan, dtype=float)
     for idx, arr in bins.items():
-        if idx < len(vals):
-            vals[idx] = float(np.nanmean(arr))
+        if idx < 0 or idx >= len(vals):
+            continue
+        vals[idx] = float(np.nanmean(arr))
     series = pd.Series(vals, index=ts)
     series_interp = series.interpolate(limit_direction="both")
     return pd.DataFrame({"t": series_interp.index, "HCE": series_interp.values}), max_duration
 
 
-def _live_hce_series(track_id: str, bin_sec: float = 1.0) -> Tuple[pd.DataFrame, Optional[float], Optional[str]]:
-    """Live per-second HCE for the current playing session."""
+def _live_hce_series(track_id: str, duration_hint: float, bin_sec: float = 1.0) -> Tuple[pd.DataFrame, Optional[float], Optional[str], int]:
+    """Live per-second HCE for the current playing session (time-windowed by playback duration)."""
     try:
         latest = storage.get_latest_spotify(session_id=None)
     except Exception:
         latest = None
     if not latest or not latest.get("is_playing") or latest.get("track_id") != track_id:
-        return pd.DataFrame(columns=["t", "HCE"]), None, None
+        return pd.DataFrame(columns=["t", "HCE"]), None, None, 0
 
     progress_ms = latest.get("progress_ms") or 0
     duration_ms = latest.get("duration_ms") or 1
     progress_sec = max(0.0, min(float(progress_ms) / 1000.0, float(duration_ms) / 1000.0))
+    duration_cap = max(duration_hint, float(duration_ms) / 1000.0, progress_sec)
 
     session_row = storage.get_latest_track_session(track_id)
     if not session_row:
-        return pd.DataFrame(columns=["t", "HCE"]), progress_sec, None
+        return pd.DataFrame(columns=["t", "HCE"]), progress_sec, None, 0
     start_ts = float(session_row.get("start_ts") or 0.0)
-    sess_id = session_row.get("session_id")
-    buckets = storage.get_buckets_between(start_ts, start_ts + progress_sec + bin_sec, session_id=sess_id)
+    # pull buckets in window, any session, and filter by track_uri match when available
+    buckets = storage.get_buckets_between(start_ts - 30.0, start_ts + duration_cap + bin_sec + 30.0, session_id=None)
 
     bins: Dict[int, list] = {}
+    live_bucket_count = 0
     for b in buckets:
-        rel = float(b.get("bucket_start_ts", 0.0) - start_ts)
+        if b.get("track_uri") and b.get("track_uri") != track_id:
+            continue
+        # prefer stored relative_seconds if present
+        rel = b.get("relative_seconds")
+        if rel is None:
+            rel = float(b.get("bucket_start_ts", 0.0) - start_ts)
+        rel = float(rel)
+        if rel < -10.0 or rel > duration_cap + 30.0:
+            continue
         idx = int(rel // bin_sec)
         bins.setdefault(idx, []).append(b.get("mean_HCE", 0.0) or 0.0)
+        live_bucket_count += 1
     max_idx = int(progress_sec // bin_sec) + 1
     ts = np.arange(0, max_idx * bin_sec, bin_sec)
     vals = np.full_like(ts, np.nan, dtype=float)
@@ -345,7 +357,7 @@ def _live_hce_series(track_id: str, bin_sec: float = 1.0) -> Tuple[pd.DataFrame,
     except Exception:
         pass
 
-    return live_df, progress_sec, live_section
+    return live_df, progress_sec, live_section, live_bucket_count
 
 
 layout = dbc.Container(
@@ -415,7 +427,7 @@ def _render_track(track_id, click_data, _n):
     avg_hce = df["mean_HCE"].mean() if not df.empty else 0.0
     # Per-second HCE lines
     hist_series, hist_max_dur = _historical_hce_series(track_id, bin_sec=1.0)
-    live_series, progress_rel, live_section_label = _live_hce_series(track_id, bin_sec=1.0)
+    live_series, progress_rel, live_section_label, live_bucket_count = _live_hce_series(track_id, duration_hint=duration, bin_sec=1.0)
     duration_final = max(duration, hist_max_dur, (progress_rel or 0.0), 1.0)
 
     # Color scale for sections
@@ -706,7 +718,10 @@ def _render_track(track_id, click_data, _n):
             f"sections={[(r.get('label'), r.get('hce'), r.get('src')) for r in per_section_rows]}",
             flush=True,
         )
-        print(f"[media_alchemy] Table updated: {mapped_points} points across {len(per_section_rows)} sections", flush=True)
+        print(
+            f"[media_alchemy] Table updated: {mapped_points} points across {len(per_section_rows)} sections; live buckets={live_bucket_count}",
+            flush=True,
+        )
     except Exception:
         pass
 

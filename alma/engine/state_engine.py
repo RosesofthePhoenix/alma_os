@@ -72,8 +72,8 @@ class StateEngine:
         self._ch_labels: List[str] = []
         self._session_id: Optional[str] = None
         self._profile_path = str(Path(__file__).resolve().parents[2] / "profiles" / "default.json")
-        self._bucket_minutes = config.BUCKET_MINUTES_DEFAULT
-        self._next_bucket_ts = time.time() + 60.0
+        self._bucket_minutes = float(config.BUCKET_MINUTES_DEFAULT)
+        self._next_bucket_ts = time.time() + (self._bucket_minutes * 60.0)
         self._next_auto_event_ts = time.time() + 600.0
         self._auto_seen_peaks: set[tuple[str, float]] = set()
         self._auto_seen_streaks: set[tuple[str, float]] = set()
@@ -331,6 +331,21 @@ class StateEngine:
         end_ts_unix = float(ts_unix_slice[-1]) if ts_unix_slice.size else float(time.time())
 
         try:
+            # Tag with current track info if available
+            track_uri = ""
+            rel_secs = None
+            try:
+                latest = storage.get_latest_spotify(session_id=None)
+                if latest and latest.get("track_id") and latest.get("progress_ms") is not None:
+                    track_uri = latest.get("track_id") or ""
+                    progress_sec = float(latest.get("progress_ms") or 0) / 1000.0
+                    latest_ts = float(latest.get("ts") or time.time())
+                    playback_start = latest_ts - progress_sec
+                    rel_secs = float(start_ts_unix) - playback_start
+            except Exception:
+                track_uri = ""
+                rel_secs = None
+
             storage.upsert_bucket(
                 bucket_start_ts=start_ts_unix,
                 bucket_end_ts=end_ts_unix,
@@ -342,6 +357,12 @@ class StateEngine:
                 Q_slope=Q_slope,
                 valid_fraction=valid_fraction,
                 label=label,
+                track_uri=track_uri,
+                relative_seconds=rel_secs,
+            )
+            print(
+                f"[bucket] Tagged bucket {start_ts_unix:.3f} uri={track_uri or 'n/a'} rel={rel_secs if rel_secs is not None else 'n/a'}",
+                flush=True,
             )
         except Exception:
             pass

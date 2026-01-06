@@ -53,10 +53,20 @@ def init_db() -> None:
                 Q_slope REAL,
                 valid_fraction REAL,
                 label TEXT,
+                track_uri TEXT,
+                relative_seconds REAL,
                 PRIMARY KEY(bucket_start_ts, session_id)
             )
             """
         )
+        try:
+            cur.execute("ALTER TABLE buckets ADD COLUMN track_uri TEXT")
+        except Exception:
+            pass
+        try:
+            cur.execute("ALTER TABLE buckets ADD COLUMN relative_seconds REAL")
+        except Exception:
+            pass
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS schedule_blocks (
@@ -363,13 +373,15 @@ def upsert_bucket(
     Q_slope: float,
     valid_fraction: float,
     label: str,
+    track_uri: str = "",
+    relative_seconds: float = None,
 ) -> None:
     with _connect() as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO buckets
-            (bucket_start_ts, bucket_end_ts, session_id, mean_X, mean_Q, mean_HCE, std_Q, Q_slope, valid_fraction, label)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (bucket_start_ts, bucket_end_ts, session_id, mean_X, mean_Q, mean_HCE, std_Q, Q_slope, valid_fraction, label, track_uri, relative_seconds)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 bucket_start_ts,
@@ -382,6 +394,8 @@ def upsert_bucket(
                 Q_slope,
                 valid_fraction,
                 label,
+                track_uri or "",
+                relative_seconds if relative_seconds is not None else None,
             ),
         )
         conn.commit()
