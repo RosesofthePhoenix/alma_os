@@ -2,6 +2,12 @@
 
 # Changelog
 
+## v0.7.6 — Dense mapping, search, and layered waveforms
+- Buckets remain ~15s but are densely tagged; on track finalize, per-second HCE waveforms are stored (`track_waveforms`) for instant historical overlays; live waveform is robust (no blanks) with peaks annotated and section portal scoring.
+- Media Alchemy: richer section table (true lifts vs multiple baselines, portal score), layered historical listens toggle, and expanded track dropdown plus dedicated search input/results that do not overwrite selection.
+- Spotify Resonance & Longitudinal: intra-track dropdowns expanded (top+recent+all), dedicated search input/results, and placeholders to avoid blank graphs; duplicate callback conflicts resolved.
+- Stability: fixed indentation/error in `_search_tracks`; prevented dropdown auto-reset.
+
 ## v0.7.5 — Real-time intra-track stabilization
 - Buckets now roll every ~15s (0.25 min) and carry `track_uri` + `relative_seconds` for precise playback alignment; per-bucket debug logs show tagging.
 - Media Alchemy live mapping uses the tagged buckets, fills within seconds, and guards binning to avoid IndexError on replays/offset drift.

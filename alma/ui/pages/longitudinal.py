@@ -64,6 +64,30 @@ def _fetch_tracks(limit: int = 200) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _search_tracks(query: str, limit: int = 50) -> List[Dict[str, str]]:
+    if not query:
+        return []
+    q = f"%{query.lower()}%"
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            df = pd.read_sql_query(
+                """
+                SELECT DISTINCT track_id, title, artist, MAX(start_ts) AS last_play
+                FROM track_sessions
+                WHERE track_id IS NOT NULL
+                  AND (lower(title) LIKE ? OR lower(artist) LIKE ?)
+                GROUP BY track_id, title, artist
+                ORDER BY last_play DESC
+                LIMIT ?
+                """,
+                conn,
+                params=(q, q, limit),
+            )
+        return [{"label": f"{r['title']} — {r['artist']}", "value": r["track_id"]} for _, r in df.iterrows()] if not df.empty else []
+    except Exception:
+        return []
+
+
 def _fetch_track_sections(track_id: str) -> pd.DataFrame:
     try:
         rows = storage.list_track_sections(track_id, limit_sessions=1)
@@ -303,6 +327,8 @@ layout = dbc.Container(
                                 [
                                     html.Div("Intra-Track Analysis", className="fw-bold mb-2"),
                                     dcc.Dropdown(id="li-track-select", placeholder="Select a track for section analysis"),
+                                    dbc.Input(id="li-search-text", placeholder="Search all tracks (title/artist)", className="mb-2", debounce=True),
+                                    dcc.Dropdown(id="li-search-results", placeholder="Search results", className="mb-3"),
                                     dcc.Graph(id="li-track-sections"),
                                     html.Div(id="li-track-table", className="mt-2"),
                                 ]
@@ -346,12 +372,24 @@ layout = dbc.Container(
     Output("li-top-sections", "figure"),
     Input("li-interval", "n_intervals"),
     Input("li-fractal-window", "data"),
+    Input("li-search-results", "value"),
+    State("li-track-select", "value"),
 )
-def update_longitudinal(_n, window):
+def update_longitudinal(_n, window, search_choice, current_selection):
     buckets = _fetch_buckets()
     events = _fetch_events()
     tracks = _fetch_tracks()
-    track_options = [{"label": f"{r['title']} — {r['artist']}", "value": r["track_id"]} for _, r in tracks.head(50).iterrows()] if not tracks.empty else []
+    track_options = (
+        [{"label": f"{r['title']} — {r['artist']}", "value": r["track_id"]} for _, r in tracks.head(150).iterrows()]
+        if not tracks.empty
+        else []
+    )
+    if search_choice and any(o["value"] == search_choice for o in track_options):
+        selected = search_choice
+    elif current_selection and any(o["value"] == current_selection for o in track_options):
+        selected = current_selection
+    else:
+        selected = track_options[0]["value"] if track_options else None
 
     # Media alchemy
     media_df = _media_alchemy(tracks, buckets)
@@ -451,9 +489,21 @@ def update_longitudinal(_n, window):
         oracle,
         fractal_fig,
         track_options,
-        (track_options[0]["value"] if track_options else None),
+        selected,
         top_sec_fig,
     )
+
+
+@callback(
+    Output("li-search-results", "options"),
+    Output("li-search-results", "value"),
+    Input("li-search-text", "value"),
+)
+def _li_search_options(query):
+    opts = _search_tracks(query or "")
+    return opts, None
+
+
 
 
 @callback(

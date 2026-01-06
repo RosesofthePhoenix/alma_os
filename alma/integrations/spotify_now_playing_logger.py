@@ -366,6 +366,10 @@ class SpotifyNowPlayingLogger:
                 self._compute_sections(self._current_track_session_id, end_ts)
             except Exception:
                 pass
+            try:
+                self._compute_waveform(self._current_track_session_id, end_ts)
+            except Exception:
+                pass
         self._current_track_session_id = None
         self._current_track_id = None
         self._current_start_ts = None
@@ -475,6 +479,50 @@ class SpotifyNowPlayingLogger:
             pass
 
         storage.upsert_track_sections(track_session_id, track_id, title, artist, rows)
+
+    def _compute_waveform(self, track_session_id: int, end_ts: float) -> None:
+        """Build per-second HCE waveform from tagged buckets and store for reuse."""
+        if not self._current_start_ts or not self._current_track_id:
+            return
+        start_ts = self._current_start_ts
+        track_id = self._current_track_id
+        duration = max(self._current_duration_sec or (end_ts - start_ts), end_ts - start_ts, 1.0)
+        bin_sec = 1.0
+        length = int(duration) + 1
+        vals = [float("nan")] * length
+        buckets = storage.get_buckets_between(start_ts - 5.0, end_ts + 5.0, session_id=self._session_id)
+        for b in buckets:
+            if b.get("track_uri") and b.get("track_uri") != track_id:
+                continue
+            rel = b.get("relative_seconds")
+            if rel is None:
+                rel = float(b.get("bucket_start_ts", 0.0) - start_ts)
+            idx = int(rel // bin_sec)
+            if 0 <= idx < length:
+                vals[idx] = float(b.get("mean_HCE") or 0.0)
+        # forward-fill then back-fill to smooth gaps
+        last = 0.0
+        for i in range(length):
+            if vals[i] == vals[i]:  # not NaN
+                last = vals[i]
+            else:
+                vals[i] = last
+        for i in range(length - 1, -1, -1):
+            if vals[i] == vals[i]:
+                last = vals[i]
+            else:
+                vals[i] = last
+        storage.insert_track_waveform(
+            track_id=track_id,
+            session_id=self._session_id,
+            title=self._current_title or "",
+            artist=self._current_artist or "",
+            start_ts=start_ts,
+            end_ts=end_ts,
+            duration=duration,
+            bin_sec=bin_sec,
+            waveform=vals,
+        )
 
 
 __all__ = ["SpotifyNowPlayingLogger"]

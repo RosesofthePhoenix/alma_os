@@ -198,6 +198,62 @@ def _relax_table(df: pd.DataFrame) -> html.Div:
         ],
         bordered=True,
         hover=True,
+        className="mt-2",
+    )
+
+
+def _search_tracks(query: str, limit: int = 50) -> List[Dict[str, str]]:
+    if not query:
+        return []
+    q = f"%{query.lower()}%"
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            df = pd.read_sql_query(
+                """
+                SELECT DISTINCT track_id, title, artist
+                FROM track_sessions
+                WHERE track_id IS NOT NULL
+                  AND (lower(title) LIKE ? OR lower(artist) LIKE ?)
+                ORDER BY MAX(start_ts) DESC
+                LIMIT ?
+                """,
+                conn,
+                params=(q, q, limit),
+            )
+        return [{"label": f"{r['title']} — {r['artist']}", "value": r["track_id"]} for _, r in df.iterrows()] if not df.empty else []
+    except Exception:
+        return []
+
+
+@callback(
+    Output("sr-search-results", "options"),
+    Output("sr-search-results", "value"),
+    Input("sr-search-text", "value"),
+)
+def _search_options_sr(query):
+    opts = _search_tracks(query or "")
+    return opts, None
+
+
+    return dbc.Table(
+        [
+            html.Thead(
+                html.Tr(
+                    [
+                        html.Th("Artist"),
+                        html.Th("Title"),
+                        html.Th("mean_HCE"),
+                        html.Th("mean_Q"),
+                        html.Th("mean_X"),
+                        html.Th("Occurrences"),
+                        html.Th("Duration"),
+                    ]
+                )
+            ),
+            html.Tbody(rows),
+        ],
+        bordered=True,
+        hover=True,
         responsive=True,
         size="sm",
     )
@@ -283,6 +339,8 @@ layout = dbc.Container(
                                 [
                                     html.Div("Intra-Track Analysis", className="fw-bold mb-2"),
                                     dcc.Dropdown(id="sr-track-select", placeholder="Select a track", className="mb-2"),
+                                    dbc.Input(id="sr-search-text", placeholder="Search all tracks (title/artist)", className="mb-2", debounce=True),
+                                    dcc.Dropdown(id="sr-search-results", placeholder="Search results", className="mb-3"),
                                     dcc.Graph(id="sr-track-sections"),
                                     html.Div(id="sr-track-table", className="mt-2"),
                                 ]
@@ -357,8 +415,10 @@ layout = dbc.Container(
     Output("sr-track-select", "value"),
     Input("sr-interval", "n_intervals"),
     Input("sr-thr", "value"),
+    Input("sr-search-results", "value"),
+    State("sr-track-select", "value"),
 )
-def update_resonance(_n, thr):
+def update_resonance(_n, thr, search_choice, current_selection):
     df = _fetch_track_sessions(limit=400)
     if thr is None:
         thr = 0.0
@@ -531,7 +591,13 @@ def update_resonance(_n, thr):
         relax_bar = px.bar(title="Top relaxation inducers (consistency)")
         relax_bar.update_layout(template="plotly_dark", height=400)
 
-    options = [{"label": f"{r['title']} — {r['artist']}", "value": r["track_id"]} for _, r in df.head(50).iterrows()] if not df.empty else []
+    options = [{"label": f"{r['title']} — {r['artist']}", "value": r["track_id"]} for _, r in df.head(150).iterrows()] if not df.empty else []
+    if search_choice and any(o["value"] == search_choice for o in options):
+        selected = search_choice
+    elif current_selection and any(o["value"] == current_selection for o in options):
+        selected = current_selection
+    else:
+        selected = options[0]["value"] if options else None
 
     return (
         hist_fig,
@@ -547,7 +613,7 @@ def update_resonance(_n, thr):
         relax_table,
         relax_bar,
         options,
-        (options[0]["value"] if options else None),
+        selected,
     )
 
 

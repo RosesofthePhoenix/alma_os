@@ -21,7 +21,7 @@ If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
 - Stress/relax guardianship: Tunable thresholds in Settings; stress banner suggests recovery track from relax history; relaxed banner suggests extension tracks.
 - Baseline robustness: loads `baselines/baseline_global_muse_v1_revised.json` with fallbacks; status logged on engine init.
 - Persistence (SQLite `data/alma.db`):
-  - Samples → buckets (mean_X/mean_Q/mean_HCE/std_Q/Q_slope/valid_fraction) on ~15s cadence for near-real-time intra-track mapping
+  - Samples → buckets (mean_X/mean_Q/mean_HCE/std_Q/Q_slope/valid_fraction) on ~15s cadence; per-track per-second waveforms stored on finalize for layered historical overlays
   - Events/bookmarks (with snapshot_json, context, quick captures)
   - Recipes (description, targets, steps, efficacy_score)
   - Schedule blocks
@@ -42,7 +42,8 @@ If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
   - v5_3 style script kept for reference; v6 is the active target.
 
 - Longitudinal: adds Fractal Life Chronicles (interactive Scattergl: time vs HCE, size std_Q, color X, event overlays, zoom/rangeslider, PDF export “Chapter of the Soul”); media alchemy, circadian map, social vs solitary, intention loops, story art remain.
-- Media Alchemy: standalone page with near-real-time per-second gold HCE waveform (historical + live blend) powered by ~15s buckets tagged to the current track; section glow/progress; table bins live/historical seconds into 5 parts with colored lifts, granular notes, and live source; top sections-by-HCE available in Resonance.
+- Media Alchemy: standalone page with robust per-second gold HCE waveform (live + historical + stored waveforms), peaks annotated, section portal scoring (true lifts vs baselines), layered historical listens toggle, and expanded track dropdown plus dedicated search input/results that don’t override your selection; top sections-by-HCE available in Resonance.
+- Intra-track dropdowns (Resonance/Longitudinal/Media Alchemy): expanded options (top + recent + all), dedicated search box + results dropdown; selection is preserved across refresh.
 
 ## Paths and runtime files
 - NDJSON stream: `sessions/current/state_stream.ndjson`

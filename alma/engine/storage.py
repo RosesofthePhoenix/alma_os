@@ -158,6 +158,22 @@ def init_db() -> None:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS track_waveforms (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_id TEXT,
+                session_id TEXT,
+                title TEXT,
+                artist TEXT,
+                start_ts REAL,
+                end_ts REAL,
+                duration REAL,
+                bin_sec REAL,
+                waveform_json TEXT
+            )
+            """
+        )
         try:
             cur.execute("ALTER TABLE track_sections ADD COLUMN source TEXT")
         except Exception:
@@ -621,6 +637,55 @@ def update_track_session_metrics(track_session_id: int, end_ts: float) -> None:
             (end_ts, means["mean_HCE"], means["mean_Q"], means["mean_X"], track_session_id),
         )
         conn.commit()
+
+
+def insert_track_waveform(
+    track_id: str,
+    session_id: Optional[str],
+    title: str,
+    artist: str,
+    start_ts: float,
+    end_ts: float,
+    duration: float,
+    bin_sec: float,
+    waveform: list,
+) -> None:
+    """Store a per-second waveform for a track session."""
+    if not track_id or start_ts is None:
+        return
+    payload = json.dumps(waveform)
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO track_waveforms (track_id, session_id, title, artist, start_ts, end_ts, duration, bin_sec, waveform_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (track_id, session_id or "", title or "", artist or "", start_ts, end_ts, duration, bin_sec, payload),
+        )
+        conn.commit()
+
+
+def list_track_waveforms(track_id: str, limit: int = 20) -> List[Dict[str, object]]:
+    if not track_id:
+        return []
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT track_id, session_id, title, artist, start_ts, end_ts, duration, bin_sec, waveform_json
+            FROM track_waveforms
+            WHERE track_id = ?
+            ORDER BY start_ts DESC
+            LIMIT ?
+            """,
+            (track_id, limit),
+        )
+        rows = _rows_to_dicts(cur)
+        for r in rows:
+            try:
+                r["waveform"] = json.loads(r.get("waveform_json") or "[]")
+            except Exception:
+                r["waveform"] = []
+        return rows
 
 
 def upsert_track_sections(track_session_id: int, track_id: str, title: str, artist: str, sections: List[Dict[str, float]]) -> None:

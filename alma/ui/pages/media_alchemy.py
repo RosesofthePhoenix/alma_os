@@ -8,7 +8,7 @@ import dash_bootstrap_components as dbc
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, callback, dcc, html
+from dash import Input, Output, State, callback, dcc, html
 
 from alma import config
 from alma.engine import storage
@@ -186,25 +186,63 @@ def _aggregate_sections(track_id: str) -> Tuple[pd.DataFrame, str]:
 def _track_options() -> List[Dict[str, str]]:
     try:
         with sqlite3.connect(config.DB_PATH) as conn:
-            df = pd.read_sql_query(
+            df_top = pd.read_sql_query(
                 """
                 SELECT track_id, title, artist, AVG(mean_HCE) AS avg_hce
                 FROM track_sessions
                 WHERE track_id IS NOT NULL AND mean_HCE IS NOT NULL
                 GROUP BY track_id, title, artist
                 ORDER BY avg_hce DESC
-                LIMIT 20
+                LIMIT 50
                 """,
                 conn,
             )
-        return (
-            [
-                {"label": f"{r['title']} — {r['artist']}", "value": r["track_id"]}
-                for _, r in df.iterrows()
-            ]
-            if not df.empty
-            else []
+            df_recent = pd.read_sql_query(
+                """
+                SELECT track_id, title, artist, MAX(start_ts) AS last_play
+                FROM track_sessions
+                WHERE track_id IS NOT NULL
+                GROUP BY track_id, title, artist
+            ORDER BY last_play DESC
+            LIMIT 100
+                """,
+                conn,
+            )
+        df_all = pd.read_sql_query(
+            """
+            SELECT DISTINCT track_id, title, artist
+            FROM track_sessions
+            WHERE track_id IS NOT NULL
+            """,
+            conn,
         )
+        df = pd.concat([df_top, df_recent, df_all], ignore_index=True)
+        df = df.drop_duplicates(subset=["track_id"], keep="first")
+        return [{"label": f"{r['title']} — {r['artist']}", "value": r["track_id"]} for _, r in df.iterrows()] if not df.empty else []
+    except Exception:
+        return []
+
+
+def _search_tracks(query: str, limit: int = 50) -> List[Dict[str, str]]:
+    if not query:
+        return []
+    q = f"%{query.lower()}%"
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            df = pd.read_sql_query(
+                """
+                SELECT DISTINCT track_id, title, artist, MAX(start_ts) AS last_play
+                FROM track_sessions
+                WHERE track_id IS NOT NULL
+                  AND (lower(title) LIKE ? OR lower(artist) LIKE ?)
+                GROUP BY track_id, title, artist
+                ORDER BY last_play DESC
+                LIMIT ?
+                """,
+                conn,
+                params=(q, q, limit),
+            )
+        return [{"label": f"{r['title']} — {r['artist']}", "value": r["track_id"]} for _, r in df.iterrows()] if not df.empty else []
     except Exception:
         return []
 
@@ -368,6 +406,16 @@ layout = dbc.Container(
                 dbc.CardBody(
                     [
                         dcc.Dropdown(id="ma-track-select", placeholder="Select a track", className="mb-2"),
+                        dbc.Input(id="ma-search-text", placeholder="Search all tracks (title/artist)", className="mb-2", debounce=True),
+                        dcc.Dropdown(id="ma-search-results", placeholder="Search results", className="mb-3"),
+                        dbc.Checklist(
+                            id="ma-show-all-hist",
+                            options=[{"label": "Show all historical listens", "value": "all"}],
+                            value=[],
+                            inline=True,
+                            switch=True,
+                            className="mb-2",
+                        ),
                         dcc.Graph(id="ma-track-plot"),
                         html.Div(id="ma-track-table", className="mt-2"),
                         html.Div(id="ma-oracle-mini", className="mt-2 text-info"),
@@ -388,16 +436,23 @@ layout = dbc.Container(
     Output("ma-track-select", "options"),
     Output("ma-track-select", "value"),
     Input("ma-interval", "n_intervals"),
+    Input("ma-search-results", "value"),
+    State("ma-track-select", "value"),
 )
-def _load_options(_n):
+def _load_options(_n, search_choice, current_selection):
     opts = _track_options()
+    # If user picked from search dropdown, honor it
+    if search_choice and any(o["value"] == search_choice for o in opts):
+        return opts, search_choice
+    # Preserve user choice if present
+    if current_selection and any(o["value"] == current_selection for o in opts):
+        return opts, current_selection
     # auto-select currently playing if available
     current_val: Optional[str] = None
     try:
         latest = storage.get_latest_spotify(session_id=None)
         if latest and latest.get("is_playing") and latest.get("track_id"):
             current_val = latest.get("track_id")
-            # ensure option present
             if current_val and not any(o["value"] == current_val for o in opts):
                 opts = [{"label": f"{latest.get('track_name','?')} — {latest.get('artists','?')}", "value": current_val}] + opts
     except Exception:
@@ -408,6 +463,16 @@ def _load_options(_n):
 
 
 @callback(
+    Output("ma-search-results", "options"),
+    Output("ma-search-results", "value"),
+    Input("ma-search-text", "value"),
+)
+def _search_options(query):
+    opts = _search_tracks(query or "")
+    return opts, None
+
+
+@callback(
     Output("ma-track-plot", "figure"),
     Output("ma-track-table", "children"),
     Output("ma-oracle-mini", "children"),
@@ -415,8 +480,9 @@ def _load_options(_n):
     Input("ma-track-select", "value"),
     Input("ma-track-plot", "clickData"),
     Input("ma-interval", "n_intervals"),
+    Input("ma-show-all-hist", "value"),
 )
-def _render_track(track_id, click_data, _n):
+def _render_track(track_id, click_data, _n, show_hist):
     if not track_id:
         return go.Figure(), html.Div("Select a track to view."), "", ""
     track_means, duration, title, artist = _latest_track_stats(track_id)
@@ -427,6 +493,19 @@ def _render_track(track_id, click_data, _n):
     avg_hce = df["mean_HCE"].mean() if not df.empty else 0.0
     # Per-second HCE lines
     hist_series, hist_max_dur = _historical_hce_series(track_id, bin_sec=1.0)
+    hist_waveforms = []
+    if show_hist and "all" in show_hist:
+        try:
+            wave_rows = storage.list_track_waveforms(track_id, limit=20)
+            for row in wave_rows:
+                wf = row.get("waveform") or []
+                if not wf:
+                    continue
+                dur = row.get("duration") or len(wf)
+                ts = np.arange(0, len(wf))
+                hist_waveforms.append((ts, wf))
+        except Exception:
+            pass
     live_series, progress_rel, live_section_label, live_bucket_count = _live_hce_series(track_id, duration_hint=duration, bin_sec=1.0)
     duration_final = max(duration, hist_max_dur, (progress_rel or 0.0), 1.0)
 
@@ -484,6 +563,19 @@ def _render_track(track_id, click_data, _n):
                 hovertemplate="t=%{x:.1f}s<br>HCE=%{y:.2f}<extra></extra>",
             )
         )
+    if hist_waveforms:
+        for ts_arr, wf in hist_waveforms:
+            fig.add_trace(
+                go.Scatter(
+                    x=ts_arr,
+                    y=wf,
+                    mode="lines",
+                    line=dict(color="rgba(215,179,77,0.12)", width=2),
+                    name="HCE (past listen)",
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
         # projection to full duration
         last_val = hist_series["HCE"].iloc[-1] if not hist_series.empty else track_mean
         if duration_final > hist_series["t"].max():
