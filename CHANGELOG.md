@@ -1,5 +1,14 @@
 # Changelog
 
+# Changelog
+
+## v0.7.4 — Live per-second resonance + Home now-playing
+- Media Alchemy: true per-second gold HCE waveform with live + historical blend; live buckets aligned to playback start; section glow and progress line; table now bins live/historical seconds into 5 parts with real means, colored lifts, and granular notes (no uniform fallback while live).
+- Spotify logger: track_session start timestamp aligned to playback progress for accurate bucket offsets; mapping debug logs.
+- Low-data polish: early-playback shows “resonance awakening,” table shows “- / building” instead of zeros when sparse.
+- Home: now-playing label always shows title/artist/progress with a live status dot; schema fixed for callback outputs.
+- Misc: cached Spotify analysis disabled by default; 403 hints to re-auth scopes.
+
 ## v0.7.3 — Intra-track resonance & media alchemy
 - Media Alchemy page: standalone tab with waveform-style intra-track view (section vrects, gold HCE line, Q fill, X line, lift vs track avg) and per-section table.
 - Spotify Resonance: intra-track card also gains waveform backdrop; added top sections-by-HCE chart.

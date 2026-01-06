@@ -280,6 +280,15 @@ layout = dbc.Container(
                         dbc.Card(
                             dbc.CardBody(
                                 [
+                                    html.Div("Top Transcendent Sections", className="fw-bold mb-2"),
+                                    dcc.Graph(id="li-top-sections"),
+                                ]
+                            ),
+                            className="page-card mb-3",
+                        ),
+                        dbc.Card(
+                            dbc.CardBody(
+                                [
                                     html.Div("Fractal Life Chronicles", className="fw-bold mb-2"),
                                     dcc.Graph(id="li-fractal"),
                                     html.Div(id="li-fractal-narrative", className="mt-2"),
@@ -334,6 +343,7 @@ layout = dbc.Container(
     Output("li-fractal", "figure"),
     Output("li-track-select", "options"),
     Output("li-track-select", "value"),
+    Output("li-top-sections", "figure"),
     Input("li-interval", "n_intervals"),
     Input("li-fractal-window", "data"),
 )
@@ -415,6 +425,24 @@ def update_longitudinal(_n, window):
     # Fractal life figure
     fractal_fig = _build_fractal_fig(*_fetch_fractal_data(window))
 
+    # Top sections
+    sec_rows = storage.list_top_sections(limit=10)
+    if sec_rows:
+        sec_df = pd.DataFrame(sec_rows)
+        top_sec_fig = px.bar(
+            sec_df,
+            x="avg_hce",
+            y="section_label",
+            color="plays",
+            orientation="h",
+            title="Top transcendent sections (avg HCE)",
+            labels={"avg_hce": "avg HCE", "section_label": "Section", "plays": "plays"},
+        )
+        top_sec_fig.update_layout(template="plotly_dark", height=320)
+    else:
+        top_sec_fig = px.bar(title="Top transcendent sections (avg HCE)")
+        top_sec_fig.update_layout(template="plotly_dark", height=320)
+
     return (
         media_fig,
         circadian_fig,
@@ -424,6 +452,7 @@ def update_longitudinal(_n, window):
         fractal_fig,
         track_options,
         (track_options[0]["value"] if track_options else None),
+        top_sec_fig,
     )
 
 

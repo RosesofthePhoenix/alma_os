@@ -3,8 +3,10 @@ import time
 import datetime as dt
 from pathlib import Path
 
+import dash
 from dash import callback, ctx, dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
+import numpy as np
 
 from alma import config
 from alma.app_state import registry
@@ -65,7 +67,15 @@ status_strip = dbc.Card(
                 _status_item("Reliability (rolling last 600)", html.Span("N/A", id="home-reliability-text")),
                 _status_item("Baseline", html.Span("N/A", id="home-baseline-text")),
                 _status_item("Current label", html.Span("(coming soon)", id="home-label-text")),
-                _status_item("Now Playing", html.Span("N/A", id="home-now-playing")),
+                _status_item(
+                    "Now Playing",
+                    html.Span(
+                        [
+                            html.Span(id="home-now-playing-dot", className="status-dot offline me-1"),
+                            html.Span("N/A", id="home-now-playing"),
+                        ]
+                    ),
+                ),
                 _status_item("Peak Track HCE", html.Span("—", id="home-peak-hce")),
             ],
             className="g-3 align-items-center status-row",
@@ -315,6 +325,7 @@ layout = dbc.Container(
     Output("home-hce-text", "children"),
     Output("home-label-text", "children"),
     Output("home-now-playing", "children"),
+    Output("home-now-playing-dot", "className"),
     Output("home-recent-events", "children"),
     Output("home-start-engine-btn", "disabled"),
     Output("home-stop-engine-btn", "disabled"),
@@ -553,22 +564,27 @@ def update_home_status(
         sp_status = {}
     latest_play = (sp_status.get("latest") or {}) if isinstance(sp_status, dict) else {}
 
-    now_playing = "N/A"
-    if latest_play:
+    now_playing = "No track"
+    now_play_dot = "status-dot offline"
+    if latest_play and latest_play.get("track_id"):
+        prog = latest_play.get("progress_ms") or 0
+        dur = latest_play.get("duration_ms") or 1
+
+        def _fmt(ms):
+            m = int(ms // 60000)
+            s = int((ms % 60000) // 1000)
+            return f"{m:02d}:{s:02d}"
+
+        label = f"{latest_play.get('artists') or ''} — {latest_play.get('track_name') or ''}"
         if latest_play.get("is_playing"):
-            prog = latest_play.get("progress_ms") or 0
-            dur = latest_play.get("duration_ms") or 1
-
-            def _fmt(ms):
-                m = int(ms // 60000)
-                s = int((ms % 60000) // 1000)
-                return f"{m:02d}:{s:02d}"
-
-            now_playing = f"{latest_play.get('artists') or ''} — {latest_play.get('track_name') or ''} ({_fmt(prog)} / {_fmt(dur)})"
+            now_playing = f"{label} ({_fmt(prog)} / {_fmt(dur)})"
+            now_play_dot = "status-dot"
         else:
-            now_playing = "Paused"
+            now_playing = f"{label} (Paused { _fmt(prog) })"
+            now_play_dot = "status-dot offline"
     if isinstance(sp_status, dict) and sp_status.get("last_error"):
         now_playing = f"Not connected: {sp_status.get('last_error')}"
+        now_play_dot = "status-dot offline"
 
     # Recent events
     recent_events_html = "No events yet."
@@ -606,6 +622,7 @@ def update_home_status(
             if track_id:
                 secs = storage.list_track_sections(track_id, limit_sessions=1)
                 if secs:
+                    avg_hce = np.nanmean([s.get("mean_HCE") or 0.0 for s in secs]) if secs else 0.0
                     current_sec = None
                     for s in secs:
                         rel_start = (s.get("section_start_ts", 0) - s.get("start_ts", 0)) if s.get("start_ts") is not None else 0
@@ -615,7 +632,9 @@ def update_home_status(
                             break
                     if current_sec is None:
                         current_sec = secs[0]
-                    track_section = f"{current_sec.get('section_label','Section')} — HCE {float(current_sec.get('mean_HCE') or 0):.2f}"
+                    lift = float((current_sec.get("mean_HCE") or 0) - avg_hce)
+                    arrow = "↑" if lift > 0.05 else ("↓" if lift < -0.05 else "→")
+                    track_section = f"{current_sec.get('section_label','Section')} — HCE {float(current_sec.get('mean_HCE') or 0):.2f} ({arrow}{lift:+.2f})"
     except Exception:
         pass
 
@@ -632,6 +651,7 @@ def update_home_status(
         hce_text,
         label_text,
         now_playing,
+        now_play_dot,
         recent_events_html,
         start_engine_disabled,
         stop_engine_disabled,

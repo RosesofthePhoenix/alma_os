@@ -143,10 +143,15 @@ def init_db() -> None:
                 end_ts REAL,
                 mean_HCE REAL,
                 mean_Q REAL,
-                mean_X REAL
+                mean_X REAL,
+                source TEXT
             )
             """
         )
+        try:
+            cur.execute("ALTER TABLE track_sections ADD COLUMN source TEXT")
+        except Exception:
+            pass
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS recipes (
@@ -612,8 +617,8 @@ def upsert_track_sections(track_session_id: int, track_id: str, title: str, arti
         conn.execute("DELETE FROM track_sections WHERE track_session_id=?", (track_session_id,))
         conn.executemany(
             """
-            INSERT INTO track_sections (track_session_id, track_id, title, artist, section_index, section_label, start_ts, end_ts, mean_HCE, mean_Q, mean_X)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO track_sections (track_session_id, track_id, title, artist, section_index, section_label, start_ts, end_ts, mean_HCE, mean_Q, mean_X, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -628,6 +633,7 @@ def upsert_track_sections(track_session_id: int, track_id: str, title: str, arti
                     float(s.get("mean_HCE", 0.0)),
                     float(s.get("mean_Q", 0.0)),
                     float(s.get("mean_X", 0.0)),
+                    s.get("source") or "",
                 )
                 for s in sections
             ],
@@ -635,14 +641,14 @@ def upsert_track_sections(track_session_id: int, track_id: str, title: str, arti
         conn.commit()
 
 
-def list_track_sections(track_id: str, limit_sessions: int = 1) -> List[Dict[str, object]]:
-    """Fetch latest sections for a track (most recent sessions)."""
+def list_track_sections(track_id: str, limit_sessions: Optional[int] = 1) -> List[Dict[str, object]]:
+    """Fetch sections for a track; limit_sessions=None returns all sessions."""
     with _connect() as conn:
         cur = conn.execute(
             """
-            SELECT ts.id AS track_session_id, ts.title, ts.artist, ts.start_ts, ts.end_ts, sec.section_index,
+            SELECT ts.id AS track_session_id, ts.session_id, ts.title, ts.artist, ts.start_ts, ts.end_ts, sec.section_index,
                    sec.section_label, sec.start_ts AS section_start_ts, sec.end_ts AS section_end_ts,
-                   sec.mean_HCE, sec.mean_Q, sec.mean_X
+                   sec.mean_HCE, sec.mean_Q, sec.mean_X, sec.source
             FROM track_sessions ts
             JOIN track_sections sec ON ts.id = sec.track_session_id
             WHERE ts.track_id = ?
@@ -658,8 +664,9 @@ def list_track_sections(track_id: str, limit_sessions: int = 1) -> List[Dict[str
         limited = []
         for r in rows:
             tsid = r.get("track_session_id")
-            if len(seen) >= limit_sessions and tsid not in seen:
-                continue
+            if limit_sessions is not None:
+                if len(seen) >= limit_sessions and tsid not in seen:
+                    continue
             seen.add(tsid)
             limited.append(r)
         return limited
@@ -711,6 +718,55 @@ def list_top_tracks(limit: int = 10, offset: int = 0) -> List[Dict[str, object]]
             r["avg_hce"] = float(r.get("avg_hce") or 0.0)
             r["play_count"] = int(r.get("play_count") or 0)
         return rows
+
+
+def get_track_session_window(track_session_id: int) -> Optional[Dict[str, object]]:
+    """Return start/end/session_id for a track session."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "SELECT start_ts, end_ts, session_id FROM track_sessions WHERE id=?",
+            (track_session_id,),
+        )
+        rows = _rows_to_dicts(cur)
+        return rows[0] if rows else None
+
+
+def get_track_library_avg(track_id: str) -> Dict[str, float]:
+    """Return average mean_HCE/Q/X across all sessions for a track."""
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT AVG(mean_HCE) AS mean_HCE, AVG(mean_Q) AS mean_Q, AVG(mean_X) AS mean_X
+            FROM track_sessions
+            WHERE track_id = ?
+              AND mean_HCE IS NOT NULL
+            """,
+            (track_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return {"mean_HCE": 0.0, "mean_Q": 0.0, "mean_X": 0.0}
+        mean_HCE = float(row[0] or 0.0)
+        mean_Q = float(row[1] or 0.0)
+        mean_X = float(row[2] or 0.0)
+        return {"mean_HCE": mean_HCE, "mean_Q": mean_Q, "mean_X": mean_X}
+
+
+def get_latest_track_session(track_id: str) -> Optional[Dict[str, object]]:
+    """Return latest track_session row for a track."""
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT id, session_id, track_id, title, artist, album, start_ts, end_ts, mean_HCE, mean_Q, mean_X
+            FROM track_sessions
+            WHERE track_id = ?
+            ORDER BY start_ts DESC
+            LIMIT 1
+            """,
+            (track_id,),
+        )
+        rows = _rows_to_dicts(cur)
+        return rows[0] if rows else None
 
 
 def list_recent_events(limit: int = 20, session_id: Optional[str] = None) -> List[Dict[str, object]]:

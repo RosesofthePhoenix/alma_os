@@ -561,8 +561,13 @@ def render_sr_track_sections(track_id):
     if not track_id:
         return go.Figure(), html.Div("Select a track to view sections.")
     df = _fetch_track_sections(track_id)
-    if df.empty:
-        return go.Figure(), html.Div("No section data yet (playback or analysis needed).")
+    if df.empty or df[["mean_HCE", "mean_Q", "mean_X"]].fillna(0).sum().sum() == 0:
+        source_note = "unknown"
+        if "source" in df.columns and not df["source"].empty:
+            mode_vals = df["source"].mode()
+            if not mode_vals.empty:
+                source_note = mode_vals.iloc[0]
+        return go.Figure(), html.Div(f"No data yet (source={source_note}).")
     first_session = df["track_session_id"].iloc[0]
     df = df[df["track_session_id"] == first_session]
     avg_hce = df["mean_HCE"].mean() if not df.empty else 0.0
@@ -605,8 +610,14 @@ def render_sr_track_sections(track_id):
             marker=dict(size=10, color=df["mean_Q"], colorscale="Plasma", showscale=True, colorbar=dict(title="Q")),
             name="HCE",
             hovertext=[
-                f"{lbl}: HCE {h:.2f}, lift {h-avg_hce:+.2f}, X {x:.3f}, Q {q:.3f}"
-                for lbl, h, x, q in zip(df["section_label"], df["mean_HCE"], df["mean_X"], df["mean_Q"])
+                f"{lbl}: HCE {h:.2f}, lift {h-avg_hce:+.2f}, X {x:.3f}, Q {q:.3f}, src {s}"
+                for lbl, h, x, q, s in zip(
+                    df["section_label"],
+                    df["mean_HCE"],
+                    df["mean_X"],
+                    df["mean_Q"],
+                    df["source"] if "source" in df.columns else [""] * len(df),
+                )
             ],
         )
     )
@@ -640,7 +651,20 @@ def render_sr_track_sections(track_id):
     )
     table = dbc.Table(
         [
-            html.Thead(html.Tr([html.Th("Section"), html.Th("Start (s)"), html.Th("End (s)"), html.Th("HCE"), html.Th("Lift vs avg"), html.Th("Q"), html.Th("X")])),
+            html.Thead(
+                html.Tr(
+                    [
+                        html.Th("Section"),
+                        html.Th("Start (s)"),
+                        html.Th("End (s)"),
+                        html.Th("HCE"),
+                        html.Th("Lift vs avg"),
+                        html.Th("Q"),
+                        html.Th("X"),
+                        html.Th("Source"),
+                    ]
+                )
+            ),
             html.Tbody(
                 [
                     html.Tr(
@@ -652,6 +676,7 @@ def render_sr_track_sections(track_id):
                             html.Td(f"{(r.get('mean_HCE',0)-avg_hce):+.2f}"),
                             html.Td(f"{r.get('mean_Q',0):.3f}"),
                             html.Td(f"{r.get('mean_X',0):.3f}"),
+                            html.Td(r.get("source", "")),
                         ]
                     )
                     for _, r in df.iterrows()

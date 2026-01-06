@@ -5,11 +5,17 @@
   "ndjson_state_path": "sessions/current/state_stream.ndjson",
   "preferred_lsl_stream_name": "",
   "SPOTIPY_CLIENT_ID": "c94c7280e5fc4459a8340a536b1d8e82",
-  "SPOTIPY_CLIENT_SECRET": "3824c0f9c00b495fb647f7b0d05be7cd",
+  "SPOTIPY_CLIENT_SECRET": "19c086562f6740a9aabef1cfd0290ad0",
   "SPOTIPY_REDIRECT_URI": "http://127.0.0.1:8888/callback",
+  "SPOTIPY_REFRESH_TOKEN": "AQAMwQrpBIGoK2vHIV6RUPrbmjIyK-7tNFGxRL5H2gzDUyi5i7iDQXrkyimhGL14_QFx1-yaz8t_dI847VDhmLo1dQVjIyO5ebloElsNn7IwhPF5ob7MeazDJg_p6nBu6vw",
   "SPOTIFY_PREFERRED_DEVICE": "iPhone",
   "baseline_path": "baselines/baseline_global_muse_v1_revised.json",
   "turrell_display": 0,
   "AUTO_ADAPT_STRESS": true,
-  "SOOTHING_SOURCE": "https://open.spotify.com/playlist/2GvC1X54C1gfY2VSVrhiMi?si=1393e5110dc44503"
+  "SOOTHING_SOURCE": "https://open.spotify.com/playlist/2GvC1X54C1gfY2VSVrhiMi?si=1393e5110dc44503",
+  "STRESS_X_THR": 1.7,
+  "STRESS_STDQ_THR": 0.12,
+  "STRESS_HCE_THR": 10.0,
+  "STRESS_RATIO_THR": 50.0,
+  "STRESS_QSLOPE_THR": -0.001
 }

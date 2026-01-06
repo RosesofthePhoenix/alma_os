@@ -42,7 +42,7 @@ If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
   - v5_3 style script kept for reference; v6 is the active target.
 
 - Longitudinal: adds Fractal Life Chronicles (interactive Scattergl: time vs HCE, size std_Q, color X, event overlays, zoom/rangeslider, PDF export “Chapter of the Soul”); media alchemy, circadian map, social vs solitary, intention loops, story art remain.
-- Media Alchemy: standalone page with waveform-style intra-track resonance (section vrects, HCE/Q/X overlays, lift vs track average) and per-section table; top sections-by-HCE available in Resonance.
+- Media Alchemy: standalone page with live per-second gold HCE waveform (historical + live blend), section glow/progress, and a table that bins live/historical seconds into 5 parts with colored lifts and granular notes (no uniform fallback while live); top sections-by-HCE available in Resonance.
 
 ## Paths and runtime files
 - NDJSON stream: `sessions/current/state_stream.ndjson`

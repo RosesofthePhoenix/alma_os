@@ -1,9 +1,17 @@
+import os
 from dash import Dash
 import dash_bootstrap_components as dbc
 
 from alma import config
 from alma.engine import storage
 from alma.app_state import registry
+
+# Clean up any old Spotipy caches to avoid interactive auth prompts.
+for cache_file in [".cache", ".cache-spotify", ".cache-spotify-real-sections", "token.json"]:
+    try:
+        os.remove(cache_file)
+    except Exception:
+        pass
 
 
 def create_app() -> Dash:

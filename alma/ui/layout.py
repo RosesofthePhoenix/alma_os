@@ -819,7 +819,7 @@ def _oracle_context():
     try:
         tid = ctx.get("current_track_id")
         if tid:
-            secs = storage.list_track_sections(tid, limit_sessions=1)
+            secs = storage.list_track_sections(tid, limit_sessions=None)
             if secs:
                 best = max(secs, key=lambda s: s.get("mean_HCE") or 0.0)
                 ctx["section_summary"] = {
@@ -919,7 +919,7 @@ def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
         f"Sections:\n{sections_txt}\n\n"
         f"Forecast:\n{forecast_txt}\n\n"
         f"User query: {user_text}\n"
-        "Respond with analytical insights and actionable recommendations only."
+        "Respond with analytical insights and actionable recommendations only. If a track is playing, weave section-level resonance insights into the answer."
     )
 
     mode_guidance = {
