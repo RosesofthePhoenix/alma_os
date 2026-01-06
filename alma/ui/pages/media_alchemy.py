@@ -441,21 +441,35 @@ def _render_track(track_id, click_data, _n):
         return f"rgba({int(120+135*t)}, {int(60+120*t)}, {int(200*t)}, 0.18)"
 
     fig = go.Figure()
+    # Placeholder / backbone over full duration to avoid blanks
+    base_x = [0, duration_final]
+    fig.add_trace(
+        go.Scatter(
+            x=base_x,
+            y=[0, 0],
+            mode="lines",
+            line=dict(color="rgba(200,200,200,0.1)", dash="dot"),
+            name="baseline",
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
     # Placeholder waveform-style backdrop
     try:
         max_rel = df["section_rel_end"].max()
     except Exception:
         max_rel = 0
-    t = np.linspace(0, max(max_rel, 1.0), num=300)
+    t = np.linspace(0, max(max_rel, duration_final, 1.0), num=300)
     waveform = 0.6 * np.sin(2 * np.pi * t / max(max_rel, 1.0) * 3) + 0.25 * np.sin(2 * np.pi * t / max(max_rel, 1.0) * 7)
     fig.add_trace(
         go.Scatter(
             x=t,
             y=waveform,
             mode="lines",
-            line=dict(color="rgba(120,120,120,0.15)"),
+            line=dict(color="rgba(120,120,120,0.12)"),
             name="waveform",
             hoverinfo="skip",
+            showlegend=False,
         )
     )
     # Historical HCE line (faint)
@@ -465,7 +479,7 @@ def _render_track(track_id, click_data, _n):
                 x=hist_series["t"],
                 y=hist_series["HCE"],
                 mode="lines",
-                line=dict(color="rgba(215,179,77,0.30)", width=3),
+                line=dict(color="rgba(215,179,77,0.30)", width=3, dash="dash"),
                 name="HCE (historical)",
                 hovertemplate="t=%{x:.1f}s<br>HCE=%{y:.2f}<extra></extra>",
             )
@@ -490,12 +504,12 @@ def _render_track(track_id, click_data, _n):
                 x=[0, duration_final],
                 y=[track_mean, track_mean],
                 mode="lines",
-                line=dict(color="rgba(215,179,77,0.15)", width=2),
+                line=dict(color="rgba(215,179,77,0.15)", width=2, dash="dash"),
                 name="HCE (library avg)",
                 hoverinfo="skip",
             )
         )
-    # Live HCE line (bright)
+    # Live HCE line (bright) or placeholder
     if not live_series.empty:
         fig.add_trace(
             go.Scatter(
@@ -506,6 +520,18 @@ def _render_track(track_id, click_data, _n):
                 marker=dict(color="#ffd15c", size=6),
                 name="HCE (live)",
                 hovertemplate="t=%{x:.1f}s<br>HCE=%{y:.2f}<extra></extra>",
+            )
+        )
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=base_x,
+                y=[track_mean or 0, track_mean or 0],
+                mode="lines",
+                line=dict(color="rgba(215,179,77,0.18)", width=2),
+                name="HCE (placeholder)",
+                hoverinfo="skip",
+                showlegend=False,
             )
         )
     for _, r in df.iterrows():
@@ -538,6 +564,7 @@ def _render_track(track_id, click_data, _n):
             ],
         )
     )
+    # Approximate per-section Q/X as step lines to keep waveform non-blank
     fig.add_trace(
         go.Scatter(
             x=df["section_rel_start"],
@@ -545,7 +572,7 @@ def _render_track(track_id, click_data, _n):
             mode="lines",
             line=dict(color="rgba(80,180,255,0.35)"),
             fill="tozeroy",
-            name="Q",
+            name="Q (section avg)",
         )
     )
     fig.add_trace(
@@ -553,10 +580,25 @@ def _render_track(track_id, click_data, _n):
             x=df["section_rel_start"],
             y=df["mean_X"],
             mode="lines",
-            line=dict(color="rgba(150,150,150,0.35)", dash="dot"),
-            name="X",
+            line=dict(color="rgba(200,80,80,0.35)", dash="dash"),
+            name="X (section avg)",
         )
     )
+    # Peak annotations for HCE > 1.0
+    combined = pd.concat([hist_series, live_series], ignore_index=True) if not hist_series.empty or not live_series.empty else pd.DataFrame(columns=["t", "HCE"])
+    if not combined.empty:
+        peaks = combined[combined["HCE"] > 1.0]
+        if not peaks.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=peaks["t"],
+                    y=peaks["HCE"],
+                    mode="markers",
+                    marker=dict(symbol="star", color="#ffd700", size=10, line=dict(color="#d7b34d", width=1)),
+                    name="Fractal Portal (HCE>1.0)",
+                    hovertemplate="Fractal Portal: HCE=%{y:.2f}<br>t=%{x:.1f}s<extra></extra>",
+                )
+            )
     fig.update_layout(
         template="plotly_dark",
         title="Live HCE waveform — your personal resonance trace",
@@ -608,6 +650,8 @@ def _render_track(track_id, click_data, _n):
         else float(hist_series["HCE"].mean()) if not hist_series.empty else track_mean
     )
     running_mean = running_mean or track_mean
+    personal_low = min([v for v in [running_mean, track_mean] if v]) if (running_mean or track_mean) else None
+    portal_count = 0
     for i in range(5):
         start = bins_edges[i]
         end = bins_edges[i + 1]
@@ -626,7 +670,14 @@ def _render_track(track_id, click_data, _n):
             gran_source = "track avg"
         q_mean = float(df.iloc[i].get("mean_Q", 0.0)) if i < len(df) else 0.0
         x_mean = float(df.iloc[i].get("mean_X", 0.0)) if i < len(df) else 0.0
-        lift_pct = ((hce_mean - running_mean) / running_mean * 100) if (running_mean and not np.isnan(hce_mean)) else None
+        lift_session = ((hce_mean - running_mean) / running_mean * 100) if (running_mean and not np.isnan(hce_mean)) else None
+        lift_track = ((hce_mean - track_mean) / track_mean * 100) if (track_mean and not np.isnan(hce_mean)) else None
+        lift_low = ((hce_mean - personal_low) / personal_low * 100) if (personal_low and not np.isnan(hce_mean)) else None
+        lifts = [v for v in [lift_session, lift_track, lift_low] if v is not None]
+        lift_best = max(lifts) if lifts else None
+        portal_flag = (lift_best is not None and lift_best > 100) or (hce_mean is not None and hce_mean > 1.5)
+        if portal_flag:
+            portal_count += 1
         per_section_rows.append(
             {
                 "label": df.iloc[i].get("section_label", f"Part {i+1}") if i < len(df) else f"Part {i+1}",
@@ -635,7 +686,11 @@ def _render_track(track_id, click_data, _n):
                 "hce": hce_mean,
                 "q": q_mean,
                 "x": x_mean,
-                "lift_pct": lift_pct,
+                "lift_best": lift_best,
+                "lift_session": lift_session,
+                "lift_track": lift_track,
+                "lift_low": lift_low,
+                "portal": portal_flag,
                 "src": gran_source,
             }
         )
@@ -664,12 +719,18 @@ def _render_track(track_id, click_data, _n):
                             html.Td(f"{r.get('start',0):.1f}"),
                             html.Td(f"{r.get('end',0):.1f}"),
                             html.Td("-" if np.isnan(r.get("hce", np.nan)) else f"{r.get('hce',0):.2f}"),
-                            html.Td(
-                                "-" if r.get("lift_pct") is None else f"{r.get('lift_pct',0):+.1f}%",
-                                className=_lift_class(r.get("lift_pct", 0), r.get("src", "")) if r.get("lift_pct") is not None else "",
-                            ),
                             html.Td("-" if np.isnan(r.get("q", np.nan)) else f"{r.get('q',0):.3f}"),
                             html.Td("-" if np.isnan(r.get("x", np.nan)) else f"{r.get('x',0):.3f}"),
+                            html.Td(
+                                "-" if r.get("lift_best") is None else f"{r.get('lift_best',0):+.1f}%",
+                                className=(
+                                    "text-warning fw-bold"
+                                    if r.get("lift_best") is not None and r.get("lift_best") > 0
+                                    else "text-secondary"
+                                ),
+                            ),
+                            html.Td("⭐⭐⭐" if r.get("portal") else ""),
+                            html.Td("-" if np.isnan(r.get("q", np.nan)) else f"{r.get('q',0):.3f}"),
                             html.Td(r.get("src", "")),
                         ]
                     )
@@ -697,6 +758,10 @@ def _render_track(track_id, click_data, _n):
             ),
             html.Div(granularity, className="text-muted small"),
             (html.Div(early_note, className="text-warning small") if early_note else None),
+            html.Div(
+                f"{portal_count} Fractal Resonance Portals detected (consistent elevation windows)",
+                className="text-info small",
+            ),
         ]
     )
 

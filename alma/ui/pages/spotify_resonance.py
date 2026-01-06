@@ -559,15 +559,51 @@ def update_resonance(_n, thr):
 )
 def render_sr_track_sections(track_id):
     if not track_id:
-        return go.Figure(), html.Div("Select a track to view sections.")
+        placeholder = go.Figure()
+        placeholder.add_trace(
+            go.Scatter(
+                x=[0, 1],
+                y=[0, 0],
+                mode="lines",
+                line=dict(color="rgba(200,200,200,0.1)", dash="dot"),
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+        placeholder.update_layout(
+            template="plotly_dark",
+            title="Resonance awakening — begin playback to map live HCE",
+            xaxis_title="Seconds (relative)",
+            yaxis_title="HCE",
+            height=420,
+        )
+        return placeholder, html.Div("Select a track to view sections.")
     df = _fetch_track_sections(track_id)
+    source_note = "unknown"
+    if "source" in df.columns and not df["source"].empty:
+        mode_vals = df["source"].mode()
+        if not mode_vals.empty:
+            source_note = mode_vals.iloc[0]
     if df.empty or df[["mean_HCE", "mean_Q", "mean_X"]].fillna(0).sum().sum() == 0:
-        source_note = "unknown"
-        if "source" in df.columns and not df["source"].empty:
-            mode_vals = df["source"].mode()
-            if not mode_vals.empty:
-                source_note = mode_vals.iloc[0]
-        return go.Figure(), html.Div(f"No data yet (source={source_note}).")
+        placeholder = go.Figure()
+        placeholder.add_trace(
+            go.Scatter(
+                x=[0, 1],
+                y=[0, 0],
+                mode="lines",
+                line=dict(color="rgba(200,200,200,0.1)", dash="dot"),
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+        placeholder.update_layout(
+            template="plotly_dark",
+            title=f"Resonance awakening — begin playback to map live HCE (source={source_note})",
+            xaxis_title="Seconds (relative)",
+            yaxis_title="HCE",
+            height=420,
+        )
+        return placeholder, html.Div(f"No data yet (source={source_note}).")
     first_session = df["track_session_id"].iloc[0]
     df = df[df["track_session_id"] == first_session]
     avg_hce = df["mean_HCE"].mean() if not df.empty else 0.0
