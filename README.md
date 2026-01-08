@@ -27,6 +27,7 @@ If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
   - Schedule blocks
   - Spotify track_sessions (mean_HCE/Q/X, durations)
 - Quick Capture & bookmarks: global panel to save note, window (1–30 min), media/person; bookmark modal captures social/activity/mood/environment/intention; surfaced in Memory.
+- Global Context Log (top bar): mood slider (1–10), capture window, social/ambience/activity, timestamps, and substance context shown by default (outer/inner toggles ON) with quick logging + toast.
 - Pages:
   - Home: status, HCE/optimal windows, peak track HCE, NDJSON toggle, bookmark modal.
   - Neurometrics: HCE raw + rolling z-score.

@@ -38,6 +38,21 @@ if not MASTER_TEXT:
         "docs/Canonical Master Document- The Complete Context of Ray Craigs Body of Work and ALMA OS.txt"
     )
 
+
+def _now_iso() -> str:
+    return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _parse_ts(txt: str) -> Optional[float]:
+    if not txt:
+        return None
+    try:
+        clean = txt.strip().replace("Z", "")
+        return dt.datetime.fromisoformat(clean).timestamp()
+    except Exception:
+        return None
+
+
 ORACLE_SYSTEM_PREFIX = (
     "You are a super-intelligent, neutral, analytical AI colleague embedded in ALMA OS. "
     "Your responses must always be formal, precise, evidence-based, concise yet thorough, "
@@ -85,6 +100,135 @@ def build_layout() -> dbc.Container:
             dcc.Store(id="oracle-speak-input", data=True),
             dcc.Store(id="oracle-read-output", data=True),
             dcc.Store(id="forecast-store"),
+            dbc.Card(
+                dbc.CardBody(
+                    [
+                        dbc.Button(
+                            "Context Log",
+                            id="global-log-toggle",
+                            color="secondary",
+                            size="sm",
+                            className="mb-2",
+                            style={"backgroundColor": "#2b2b36", "borderColor": "#ff9800"},
+                        ),
+                        dbc.Collapse(
+                            id="global-log-collapse",
+                            is_open=False,
+                            children=[
+                                dbc.Row(
+                                    [
+                                        dbc.Col(dbc.Input(id="gl-social", placeholder="Social (who/alone)", type="text", autoFocus=True), md=3),
+                                        dbc.Col(dbc.Input(id="gl-ambience", placeholder="Ambience (lighting/noise)", type="text"), md=3),
+                                        dbc.Col(dbc.Input(id="gl-activity", placeholder="Activity (what are you doing)", type="text"), md=3),
+                                        dbc.Col(
+                                            dbc.Input(id="gl-minutes", placeholder="Capture window (minutes, any length)", type="number", min=0, step=1),
+                                            md=3,
+                                        ),
+                                    ],
+                                    className="gy-2",
+                                ),
+                                dbc.Row(
+                                    [
+                                        dbc.Col(
+                                            [
+                                                html.Div("Mood (1-10)", className="small text-muted mb-1"),
+                                                dcc.Slider(id="gl-mood", min=1, max=10, step=1, value=5, marks=None),
+                                            ],
+                                            md=4,
+                                        ),
+                                    ],
+                                    className="gy-2",
+                                ),
+                                dbc.Row(
+                                    [
+                                        dbc.Col(
+                                            [
+                                                dbc.Input(id="gl-start-ts", placeholder="Start timestamp (ISO)", type="text"),
+                                                dbc.Button("Set start to now", id="gl-start-now", size="sm", color="secondary", className="mt-1"),
+                                            ],
+                                            md=3,
+                                        ),
+                                        dbc.Col(
+                                            [
+                                                dbc.Input(id="gl-end-ts", placeholder="Finish timestamp (ISO)", type="text"),
+                                                dbc.Button("Set finish to now", id="gl-end-now", size="sm", color="secondary", className="mt-1"),
+                                            ],
+                                            md=3,
+                                        ),
+                                        dbc.Col(
+                                            [
+                                                dbc.Checklist(
+                                                    options=[{"label": "Show substance section", "value": "show"}],
+                                                    value=["show"],
+                                                    id="gl-substance-toggle",
+                                                    switch=True,
+                                                ),
+                                                dbc.Checklist(
+                                                    options=[{"label": "Add substance context", "value": "show"}],
+                                                    value=["show"],
+                                                    id="gl-substance-toggle-inner",
+                                                    switch=True,
+                                                ),
+                                                html.Div(
+                                                    id="gl-substance-panel",
+                                                    style={"display": "none"},
+                                                    children=[
+                                                        html.Div("Substance context (0–10)", className="small text-muted mb-1"),
+                                                        dbc.Row(
+                                                            [
+                                                                dbc.Col(
+                                                                    [
+                                                                        html.Div("Cocaine highness", className="small"),
+                                                                        dcc.Slider(id="gl-cocaine", min=0, max=10, step=1, value=0, marks=None),
+                                                                    ]
+                                                                ),
+                                                                dbc.Col(
+                                                                    [
+                                                                        html.Div("Ketamine highness", className="small"),
+                                                                        dcc.Slider(id="gl-ketamine", min=0, max=10, step=1, value=0, marks=None),
+                                                                    ]
+                                                                ),
+                                                                dbc.Col(
+                                                                    [
+                                                                        html.Div("Tusi highness", className="small"),
+                                                                        dcc.Slider(id="gl-tusi", min=0, max=10, step=1, value=0, marks=None),
+                                                                        dbc.Input(id="gl-tusi-source", placeholder="Tusi source", type="text", className="mt-1"),
+                                                                    ]
+                                                                ),
+                                                            ],
+                                                            className="gy-2",
+                                                        ),
+                                                    ],
+                                                ),
+                                            ],
+                                            md=6,
+                                        ),
+                                    ],
+                                    className="gy-2 mt-2",
+                                ),
+                                dbc.Button(
+                                    "Log Context Entry",
+                                    id="gl-save",
+                                    color="warning",
+                                    className="mt-3",
+                                    style={"borderColor": "#ff9800", "boxShadow": "0 0 6px #ff9800"},
+                                ),
+                                html.Span(id="gl-status", className="ms-2 text-success"),
+                                dbc.Toast(
+                                    id="gl-toast",
+                                    is_open=False,
+                                    header="Context captured",
+                                    duration=4000,
+                                    icon="warning",
+                                    style={"backgroundColor": "#1a1a22", "color": "#fefefe"},
+                                ),
+                            ],
+                        ),
+                    ]
+                ),
+                className="mb-3",
+                style={"backgroundColor": "#111118", "border": "1px solid #333"},
+            ),
             html.Div(
                 id="notif-banner",
                 className="text-center fw-bold",
@@ -994,6 +1138,122 @@ def _highlight_hce(text: str):
         else:
             parts.append(seg)
     return parts
+
+
+# Global top-bar logging callbacks
+@callback(
+    Output("global-log-collapse", "is_open"),
+    Input("global-log-toggle", "n_clicks"),
+    State("global-log-collapse", "is_open"),
+)
+def toggle_global_log(n, is_open):
+    if not n:
+        return is_open
+    return not is_open
+
+
+@callback(Output("gl-substance-panel", "style"), Input("gl-substance-toggle", "value"), Input("gl-substance-toggle-inner", "value"))
+def show_substance(toggle_outer, toggle_inner):
+    # outer controls visibility; inner controls inclusion
+    return {"display": "block" if ("show" in (toggle_outer or [])) else "none"}
+
+
+@callback(
+    Output("gl-start-ts", "value"),
+    Output("gl-end-ts", "value"),
+    Input("gl-start-now", "n_clicks"),
+    Input("gl-end-now", "n_clicks"),
+    State("gl-start-ts", "value"),
+    State("gl-end-ts", "value"),
+    prevent_initial_call=True,
+    allow_duplicate=True,
+)
+def set_now_global(start_clicks, end_clicks, start_val, end_val):
+    triggered = dash.callback_context.triggered_id
+    if triggered == "gl-start-now":
+        return _now_iso(), end_val
+    if triggered == "gl-end-now":
+        return start_val, _now_iso()
+    raise dash.exceptions.PreventUpdate  # type: ignore
+
+
+@callback(
+    Output("gl-status", "children"),
+    Output("gl-toast", "is_open"),
+    Output("gl-toast", "children"),
+    Output("gl-social", "value"),
+    Output("gl-ambience", "value"),
+    Output("gl-activity", "value"),
+    Output("gl-minutes", "value"),
+    Output("gl-mood", "value"),
+    Output("gl-substance-toggle", "value"),
+    Output("gl-cocaine", "value"),
+    Output("gl-ketamine", "value"),
+    Output("gl-tusi", "value"),
+    Output("gl-tusi-source", "value"),
+    Input("gl-save", "n_clicks"),
+    State("gl-social", "value"),
+    State("gl-ambience", "value"),
+    State("gl-activity", "value"),
+    State("gl-minutes", "value"),
+    State("gl-mood", "value"),
+    State("gl-substance-toggle", "value"),
+    State("gl-cocaine", "value"),
+    State("gl-ketamine", "value"),
+    State("gl-tusi", "value"),
+    State("gl-tusi-source", "value"),
+    prevent_initial_call=True,
+    allow_duplicate=True,
+)
+def save_global_log(n_clicks, social, ambience, activity, minutes, mood, sub_toggle, coc, ket, tusi, tusi_src):
+    if not n_clicks:
+        raise dash.exceptions.PreventUpdate  # type: ignore
+    session_id = registry.state_engine.get_session_id() or ""
+    now = time.time()
+    tags = {
+        "page": "global_bar",
+        "social": social or "",
+        "ambience": ambience or "",
+        "activity": activity or "",
+        "minutes": minutes,
+        "mood": mood,
+    }
+    if "show" in (sub_toggle or []):
+        tags.update(
+            {
+                "cocaine_highness": coc or 0,
+                "ketamine_highness": ket or 0,
+                "tusi_highness": tusi or 0,
+                "tusi_source": tusi_src or "",
+            }
+        )
+    status = registry.state_engine.get_status() or {}
+    ctx_json = {"saved_ts": now, "snapshot": status}
+    storage.insert_event(
+        ts=now,
+        session_id=session_id,
+        kind="global_log",
+        label="Context entry",
+        note="",
+        tags_json=tags,
+        context_json=ctx_json,
+    )
+    # Clear fields after save
+    return (
+        "Saved.",
+        True,
+        "",
+        "",
+        "",
+        "",
+        None,
+        mood or 5,
+        sub_toggle or ["show"],
+        0,
+        0,
+        0,
+        "",
+    )
 
 
 def _forecast_probabilities() -> Dict[str, object]:

@@ -1,7 +1,20 @@
 from dash import Input, Output
 import dash_bootstrap_components as dbc
 
-from . import home, neurometrics, readiness, scheduler, memory, environment, recipes, settings, spotify_resonance, longitudinal, media_alchemy
+from . import (
+    home,
+    neurometrics,
+    readiness,
+    scheduler,
+    memory,
+    environment,
+    recipes,
+    settings,
+    spotify_resonance,
+    longitudinal,
+    media_alchemy,
+    manifest,
+)
 
 
 PAGES = [
@@ -16,6 +29,7 @@ PAGES = [
     {"name": "Environment", "path": "/environment", "layout": environment.layout},
     {"name": "Recipes", "path": "/recipes", "layout": recipes.layout},
     {"name": "Settings", "path": "/settings", "layout": settings.layout},
+    {"name": "Manifest", "path": "/manifest", "layout": manifest.layout()},
 ]
 
 PAGE_MAP = {page["path"]: page for page in PAGES}

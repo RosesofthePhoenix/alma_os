@@ -2,6 +2,11 @@
 
 # Changelog
 
+## v0.7.8.1 — Global context log polish
+- Added a Mood slider (1–10) to the global Context Log; mood is persisted in saved tags.
+- Substance controls now default ON (outer and inner toggles) so the substance panel is visible and captured by default.
+- Save flow keeps substance toggles on and resets mood to baseline (5) while clearing other inputs for fast repeated logging.
+
 ## v0.7.7 — Oracle gold-tier context (memory/readiness/scheduler/longitudinal)
 - Oracle prompt now injects a "Gold-Tier Contextual Layers" block: top events/bookmarks/captured moments (10 most relevant), readiness aggregates, upcoming/completed scheduler blocks, and longitudinal top tracks; all are date-aware (today/yesterday/explicit date or recent 7-day window) for historical queries.
 - Historical awareness: if the user mentions a past date/day, the context is pulled for that period (events, readiness, schedule completions, longitudinal patterns) and summarized concisely.
