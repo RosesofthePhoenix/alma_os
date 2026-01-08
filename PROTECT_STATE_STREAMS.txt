@@ -1,0 +1,11 @@
+DO NOT DELETE, REPLACE, OR COMMIT LOCAL STATE STREAMS.
+Protected files:
+- sessions/current/state_stream.ndjson
+- sessions/current/spotify_playback.ndjson
+
+Safeguards in place:
+- git update-index --skip-worktree on both files (prevents git checkout/restore from touching them)
+- .git/hooks/pre-commit prevents staging/committing these files
+
+If skip-worktree is cleared manually, reapply with:
+  git update-index --skip-worktree sessions/current/state_stream.ndjson sessions/current/spotify_playback.ndjson

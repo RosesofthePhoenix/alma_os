@@ -70,3 +70,5 @@ Start from Environment page (NDJSON must be ON). Runner passes ndjson/mode paths
 - NDJSON empty: ensure engine running and `sessions/current/state_stream.ndjson` being written. ***!
 - Oracle unreachable: ensure `ollama serve` is running and model is pulled; `curl -s http://localhost:11434/api/tags` should respond.
 - Oracle context file: `docs/Canonical Master Document- The Complete Context of Ray Craigs Body of Work and ALMA OS.txt` (single source of truth, already loaded into the system prompt).
+- **DO NOT DELETE/REPLACE/COMMIT LOCAL STATE STREAMS:** `sessions/current/state_stream.ndjson` and `sessions/current/spotify_playback.ndjson` are protected locally. A pre-commit hook blocks staging them, and git skip-worktree is set. If skip-worktree is ever cleared, reapply with:  
+  `git update-index --skip-worktree sessions/current/state_stream.ndjson sessions/current/spotify_playback.ndjson`
