@@ -2,6 +2,11 @@
 
 # Changelog
 
+## v0.7.7 — Oracle gold-tier context (memory/readiness/scheduler/longitudinal)
+- Oracle prompt now injects a "Gold-Tier Contextual Layers" block: top events/bookmarks/captured moments (10 most relevant), readiness aggregates, upcoming/completed scheduler blocks, and longitudinal top tracks; all are date-aware (today/yesterday/explicit date or recent 7-day window) for historical queries.
+- Historical awareness: if the user mentions a past date/day, the context is pulled for that period (events, readiness, schedule completions, longitudinal patterns) and summarized concisely.
+- Applies to all Oracle modes (Interpret, Forecast, Story, Well-Being, Mirror, Fractal, Intra-Track Resonance, Open Exploration) without changing UX; responses stay empirical and actionable.
+
 ## v0.7.6 — Dense mapping, search, and layered waveforms
 - Buckets remain ~15s but are densely tagged; on track finalize, per-second HCE waveforms are stored (`track_waveforms`) for instant historical overlays; live waveform is robust (no blanks) with peaks annotated and section portal scoring.
 - Media Alchemy: richer section table (true lifts vs multiple baselines, portal score), layered historical listens toggle, and expanded track dropdown plus dedicated search input/results that do not overwrite selection.

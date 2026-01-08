@@ -36,7 +36,7 @@ If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
   - Memory: similarity search with HCE weighting; quick captures list; TRANSCENDENT filter.
   - Spotify Resonance: visuals first (HCE histogram, top artists by HCE, bar/scatter, timeline, correlation heatmap, findings), Top 20 table at bottom; backfills missing means; suggested next track banner; relax-inducing tracks section.
   - Longitudinal Insights: media alchemy (HCE lift), circadian map, social vs solitary harmony, intention-outcome loops, “state story” generator with data-art scatter.
-- Oracle (Phase 7, v0.7.3): fixed-right overlay using local Ollama (`huihui_ai/dolphin3-abliterated`) with 90s timeout + retries; neutral, analytical system prompt with canonical doc; mic (browser SpeechRecognition) and TTS (SpeechSynthesis) toggles; patterns (social/activity/mood/media, intention payoff), lite forecast (p90 transcendence/strain/media), and section summaries (best/top sections) fed into responses.
+- Oracle (Phase 7, v0.7.7): fixed-right overlay using local Ollama (`huihui_ai/dolphin3-abliterated`) with 90s timeout + retries; neutral, analytical system prompt with canonical master doc; mic (browser SpeechRecognition) and TTS (SpeechSynthesis) toggles; gold-tier context injected into every mode (top events/bookmarks/captured moments, readiness aggregates, upcoming/completed schedule blocks, longitudinal top tracks), all date-aware for historical queries; patterns (social/activity/mood/media, intention payoff), lite forecast (p90 transcendence/strain/media), section summaries (best/top sections) fed into responses.
 - Turrell Room:
   - Runner launches `external/xq_turrell_room_2d_v6_hce.py` (HCE-enhanced); HUD/text fallback (SysFont→freetype→pixel), hotkeys logged (H, 0–3, F, ESC double-press), display retry, NDJSON follower tolerant to truncation; display selection (Primary/External) persisted.
   - v5_3 style script kept for reference; v6 is the active target.
@@ -69,4 +69,4 @@ Start from Environment page (NDJSON must be ON). Runner passes ndjson/mode paths
 - Font errors in Turrell: v6 falls back to freetype/pixel text; HUD remains visible even without pygame.font.
 - NDJSON empty: ensure engine running and `sessions/current/state_stream.ndjson` being written. ***!
 - Oracle unreachable: ensure `ollama serve` is running and model is pulled; `curl -s http://localhost:11434/api/tags` should respond.
-- Oracle context files: keep `docs/alma_os_state_layer_canonical.md` and `docs/Legacy of the Soul Final.txt` present for best answers (FAE PDF summarized inline).
+- Oracle context file: `docs/Canonical Master Document- The Complete Context of Ray Craigs Body of Work and ALMA OS.txt` (single source of truth, already loaded into the system prompt).

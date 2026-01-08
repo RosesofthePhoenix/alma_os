@@ -288,6 +288,16 @@ def _build_uniform_sections(duration: float, means: Dict[str, float]) -> pd.Data
 
 def _historical_hce_series(track_id: str, bin_sec: float = 1.0, max_sessions: int = 80) -> Tuple[pd.DataFrame, float]:
     """Aggregate historical HCE across sessions into per-second bins; returns df and max duration."""
+    # Prefer stored per-second waveform points
+    try:
+        wf_points = storage.list_track_waveform_points(track_id, limit_sessions=3, limit_points=8000)
+        if wf_points:
+            df = pd.DataFrame(wf_points)
+            agg = df.groupby("rel_sec")["hce"].mean().reset_index().rename(columns={"rel_sec": "t", "hce": "HCE"})
+            max_dur = agg["t"].max() if not agg.empty else 0.0
+            return agg, max_dur
+    except Exception:
+        pass
     try:
         with sqlite3.connect(config.DB_PATH) as conn:
             sess_df = pd.read_sql_query(
@@ -379,7 +389,10 @@ def _live_hce_series(track_id: str, duration_hint: float, bin_sec: float = 1.0) 
         if idx < len(vals):
             vals[idx] = float(np.nanmean(arr))
     series = pd.Series(vals, index=ts)
+    series = series.ffill()
     series_interp = series.interpolate(limit_direction="forward")
+    if series_interp.isna().any():
+        series_interp = series_interp.fillna(method="ffill").fillna(0.0)
     live_df = pd.DataFrame({"t": series_interp.index, "HCE": series_interp.values})
 
     live_section = None
@@ -527,7 +540,7 @@ def _render_track(track_id, click_data, _n, show_hist):
             x=base_x,
             y=[0, 0],
             mode="lines",
-            line=dict(color="rgba(200,200,200,0.1)", dash="dot"),
+            line=dict(color="rgba(200,200,200,0.12)", dash="dot"),
             name="baseline",
             hoverinfo="skip",
             showlegend=False,
@@ -551,7 +564,7 @@ def _render_track(track_id, click_data, _n, show_hist):
             showlegend=False,
         )
     )
-    # Historical HCE line (faint)
+    # Historical HCE line (faint) and waveform overlays
     if not hist_series.empty:
         fig.add_trace(
             go.Scatter(
@@ -614,6 +627,19 @@ def _render_track(track_id, click_data, _n, show_hist):
                 hovertemplate="t=%{x:.1f}s<br>HCE=%{y:.2f}<extra></extra>",
             )
         )
+        # Portal pulse markers for HCE > 1.0
+        live_peaks = live_series[live_series["HCE"] > 1.0]
+        if not live_peaks.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=live_peaks["t"],
+                    y=live_peaks["HCE"],
+                    mode="markers",
+                    marker=dict(symbol="star", color="#ffd700", size=10, line=dict(color="#d7b34d", width=1)),
+                    name="Portal (HCE>1.0)",
+                    hovertemplate="Fractal Portal: HCE=%{y:.2f}<br>t=%{x:.1f}s<extra></extra>",
+                )
+            )
     else:
         fig.add_trace(
             go.Scatter(
@@ -625,6 +651,13 @@ def _render_track(track_id, click_data, _n, show_hist):
                 hoverinfo="skip",
                 showlegend=False,
             )
+        )
+        fig.add_annotation(
+            x=duration_final * 0.5,
+            y=0,
+            text="Resonance awakening — playback to map live",
+            showarrow=False,
+            font=dict(color="#aaaaaa"),
         )
     for _, r in df.iterrows():
         fig.add_vrect(
@@ -677,7 +710,12 @@ def _render_track(track_id, click_data, _n, show_hist):
         )
     )
     # Peak annotations for HCE > 1.0
-    combined = pd.concat([hist_series, live_series], ignore_index=True) if not hist_series.empty or not live_series.empty else pd.DataFrame(columns=["t", "HCE"])
+    combined_parts = []
+    if not hist_series.empty:
+        combined_parts.append(hist_series)
+    if not live_series.empty:
+        combined_parts.append(live_series)
+    combined = pd.concat(combined_parts, ignore_index=True) if combined_parts else pd.DataFrame(columns=["t", "HCE"])
     if not combined.empty:
         peaks = combined[combined["HCE"] > 1.0]
         if not peaks.empty:

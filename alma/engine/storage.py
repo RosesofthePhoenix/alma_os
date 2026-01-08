@@ -174,6 +174,23 @@ def init_db() -> None:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS track_waveform_points (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_id TEXT,
+                session_id TEXT,
+                title TEXT,
+                artist TEXT,
+                abs_ts REAL,
+                rel_sec REAL,
+                hce REAL,
+                q REAL,
+                x REAL,
+                reliability REAL
+            )
+            """
+        )
         try:
             cur.execute("ALTER TABLE track_sections ADD COLUMN source TEXT")
         except Exception:
@@ -686,6 +703,72 @@ def list_track_waveforms(track_id: str, limit: int = 20) -> List[Dict[str, objec
             except Exception:
                 r["waveform"] = []
         return rows
+
+
+def insert_track_waveform_points(
+    track_id: str,
+    session_id: Optional[str],
+    title: str,
+    artist: str,
+    start_ts: float,
+    points: List[Dict[str, float]],
+) -> None:
+    """Bulk insert per-second waveform points."""
+    if not track_id or not points:
+        return
+    with _connect() as conn:
+        conn.executemany(
+            """
+            INSERT INTO track_waveform_points (track_id, session_id, title, artist, abs_ts, rel_sec, hce, q, x, reliability)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    track_id,
+                    session_id or "",
+                    title or "",
+                    artist or "",
+                    start_ts + p.get("rel_sec", 0.0),
+                    p.get("rel_sec", 0.0),
+                    p.get("hce"),
+                    p.get("q"),
+                    p.get("x"),
+                    p.get("reliability"),
+                )
+                for p in points
+            ],
+        )
+        conn.commit()
+
+
+def list_track_waveform_points(track_id: str, limit_sessions: int = 3, limit_points: int = 5000) -> List[Dict[str, object]]:
+    if not track_id:
+        return []
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT track_id, session_id, title, artist, abs_ts, rel_sec, hce, q, x, reliability
+            FROM track_waveform_points
+            WHERE track_id = ?
+            ORDER BY abs_ts DESC, rel_sec ASC
+            LIMIT ?
+            """,
+            (track_id, limit_points),
+        )
+        rows = _rows_to_dicts(cur)
+        if limit_sessions is None:
+            return rows
+        # limit by unique session_id
+        seen = set()
+        limited = []
+        for r in rows:
+            sid = r.get("session_id")
+            if sid not in seen:
+                if len(seen) >= limit_sessions:
+                    continue
+                seen.add(sid)
+            limited.append(r)
+        return limited
 
 
 def upsert_track_sections(track_session_id: int, track_id: str, title: str, artist: str, sections: List[Dict[str, float]]) -> None:

@@ -3,7 +3,7 @@ import json
 import sqlite3
 import datetime as dt
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Optional, Tuple
 import re
 import requests
 
@@ -147,7 +147,9 @@ def build_layout() -> dbc.Container:
                             {"label": "State Story", "value": "story"},
                             {"label": "Well-Being", "value": "wellbeing"},
                             {"label": "Philosophical Mirror", "value": "mirror"},
+                            {"label": "Intra-Track Resonance", "value": "intra"},
                             {"label": "Fractal Narrative", "value": "fractal"},
+                            {"label": "Open Exploration", "value": "open"},
                         ],
                         value="interpret",
                         clearable=False,
@@ -809,6 +811,16 @@ def _oracle_context():
             ctx["current_track"] = f"{latest_track.get('track_name','?')} — {latest_track.get('artists','?')}"
             ctx["current_track_id"] = latest_track.get("track_id")
             ctx["current_progress_ms"] = latest_track.get("progress_ms")
+            # Per-second waveform summary (latest sessions)
+            wf_points = storage.list_track_waveform_points(latest_track.get("track_id"), limit_sessions=2, limit_points=4000)
+            if wf_points:
+                df = pd.DataFrame(wf_points)
+                if not df.empty:
+                    ctx["current_waveform_summary"] = {
+                        "peak_hce": float(df["hce"].max()),
+                        "micro_portals": int((df[df["hce"] > 1.0]["hce"].count())),
+                        "max_rel": float(df["rel_sec"].max()),
+                    }
     except Exception:
         pass
     # Forecast snapshot
@@ -853,6 +865,9 @@ def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
     current_track = ctx.get("current_track")
     if current_track and current_track != "n/a":
         metrics += f" Current track: {current_track}."
+        wf = ctx.get("current_waveform_summary")
+        if wf:
+            metrics += f" Waveform: peak HCE {wf.get('peak_hce',0):.2f}; micro-portals>{wf.get('micro_portals',0)}; duration ~{wf.get('max_rel',0):.1f}s."
 
     patterns = ctx.get("patterns") or {}
     pattern_lines = []
@@ -911,6 +926,8 @@ def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
             f"(HCE {section.get('mean_HCE',0):.2f}, Q {section.get('mean_Q',0):.3f}, X {section.get('mean_X',0):.3f})"
         )
 
+    gold_layers = _gold_context_layers(user_text)
+
     base_prompt = (
         f"{ORACLE_SYSTEM_PREFIX}\n\n"
         f"Mode: {mode}\n"
@@ -918,6 +935,7 @@ def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
         f"Patterns:\n{patterns_txt}\n\n"
         f"Sections:\n{sections_txt}\n\n"
         f"Forecast:\n{forecast_txt}\n\n"
+        f"{gold_layers}\n\n"
         f"User query: {user_text}\n"
         "Respond with analytical insights and actionable recommendations only. If a track is playing, weave section-level resonance insights into the answer."
     )
@@ -929,6 +947,8 @@ def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
         "wellbeing": "Recommend evidence-based adjustments for sustained harmony and recovery.",
         "mirror": "Reflect observed patterns neutrally with empirical correlations.",
         "fractal": "Identify recursive patterns across scales (micro neural → macro daily).",
+        "intra": "You are the Media Alchemy oracle — deeply analyze the specified track's second-by-second HCE/Q/X waveform from track_waveform_points and buckets. Identify fractal portals (>1.0 HCE spikes), consistent elevation windows across listens, micro-patterns, section lifts vs personal baselines, and correlations with harmonics/qualia. Provide section-by-section breakdown, peak insights, FAE-aligned recommendations for deliberate transcendence, and forecast for repeat listens. Always ground strictly in empirical data.",
+        "open": "Use the full SQLite context (sessions, buckets, track_waveform_points, patterns) to answer freely and insightfully.",
     }.get(mode.lower(), "")
 
     return base_prompt + (f"\nMode guidance: {mode_guidance}" if mode_guidance else "")
@@ -1109,6 +1129,165 @@ def _pattern_revelations() -> Dict[str, object]:
                 out["intention_top"] = (top.iloc[0]["intention"], float(top.iloc[0]["delta"]))
 
     return out
+
+
+def _parse_date_window(user_text: str) -> Tuple[Optional[float], Optional[float]]:
+    """Parse simple date mentions: today, yesterday, YYYY-MM-DD/YY/MM/DD, or Month Day."""
+    txt = (user_text or "").lower().strip()
+    now = dt.datetime.utcnow()
+    if "today" in txt or "now" in txt:
+        start = dt.datetime(now.year, now.month, now.day)
+        end = start + dt.timedelta(days=1)
+        return start.timestamp(), end.timestamp()
+    if "yesterday" in txt:
+        start = dt.datetime(now.year, now.month, now.day) - dt.timedelta(days=1)
+        end = start + dt.timedelta(days=1)
+        return start.timestamp(), end.timestamp()
+    for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%b %d %Y", "%b %d", "%B %d %Y", "%B %d"]:
+        try:
+            parsed = dt.datetime.strptime(txt, fmt)
+            if parsed.year == 1900:
+                parsed = parsed.replace(year=now.year)
+            start = dt.datetime(parsed.year, parsed.month, parsed.day)
+            end = start + dt.timedelta(days=1)
+            return start.timestamp(), end.timestamp()
+        except Exception:
+            continue
+    return None, None
+
+
+def _gold_context_layers(user_text: str) -> str:
+    """Concise gold-tier context from memory/readiness/scheduler/longitudinal, with historical window support."""
+    ts0, ts1 = _parse_date_window(user_text)
+    now = time.time()
+    window_start = ts0 or (now - 7 * 24 * 3600)
+    window_end = ts1 or now
+
+    # Memory/events (bookmarks, captured moments)
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            ev_df = pd.read_sql_query(
+                """
+                SELECT ts, label, note
+                FROM events
+                WHERE ts BETWEEN ? AND ?
+                ORDER BY ts DESC
+                LIMIT 20
+                """,
+                conn,
+                params=(window_start, window_end),
+            )
+    except Exception:
+        ev_df = pd.DataFrame()
+
+    # Readiness aggregates
+    try:
+        buckets = storage.get_buckets_between(window_start, window_end, session_id=None)
+        ready = None
+        if buckets:
+            h = [b.get("mean_HCE", 0.0) or 0.0 for b in buckets]
+            q = [b.get("mean_Q", 0.0) or 0.0 for b in buckets]
+            x = [b.get("mean_X", 0.0) or 0.0 for b in buckets]
+            ready = {
+                "mean_HCE": float(np.nanmean(h)) if h else None,
+                "mean_Q": float(np.nanmean(q)) if q else None,
+                "mean_X": float(np.nanmean(x)) if x else None,
+                "count": len(buckets),
+            }
+    except Exception:
+        ready = None
+
+    # Scheduler
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            sched_up = pd.read_sql_query(
+                """
+                SELECT title, block_type, start_ts, end_ts, duration_min
+                FROM schedule_blocks
+                WHERE start_ts >= ?
+                ORDER BY start_ts ASC
+                LIMIT 5
+                """,
+                conn,
+                params=(now,),
+            )
+            sched_past = pd.read_sql_query(
+                """
+                SELECT title, block_type, start_ts, end_ts, duration_min
+                FROM schedule_blocks
+                WHERE end_ts <= ? AND end_ts >= ?
+                ORDER BY end_ts DESC
+                LIMIT 5
+                """,
+                conn,
+                params=(window_end, window_start),
+            )
+    except Exception:
+        sched_up, sched_past = pd.DataFrame(), pd.DataFrame()
+
+    # Longitudinal (top tracks in window)
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            long_df = pd.read_sql_query(
+                """
+                SELECT title, artist, mean_HCE, start_ts
+                FROM track_sessions
+                WHERE start_ts BETWEEN ? AND ?
+                ORDER BY mean_HCE DESC
+                LIMIT 5
+                """,
+                conn,
+                params=(window_start, window_end),
+            )
+    except Exception:
+        long_df = pd.DataFrame()
+
+    lines: List[str] = ["Gold-Tier Contextual Layers for Full Fractal View (Current + Historical when relevant):"]
+
+    if not ev_df.empty:
+        ev_lines = []
+        for _, r in ev_df.head(10).iterrows():
+            ts_h = dt.datetime.utcfromtimestamp(r["ts"]).strftime("%Y-%m-%d %H:%M")
+            label = r.get("label") or ""
+            note = r.get("note") or ""
+            ev_lines.append(f"{ts_h}: {label} — {note[:80]}")
+        lines.append("Memory Patterns:\n" + "\n".join(ev_lines))
+    else:
+        lines.append("Memory Patterns: No events/bookmarks in this window.")
+
+    if ready:
+        lines.append(
+            f"Readiness & Forecast: mean_HCE {ready.get('mean_HCE',0):.2f}, Q {ready.get('mean_Q',0):.3f}, X {ready.get('mean_X',0):.3f} over {ready.get('count',0)} buckets."
+        )
+    else:
+        lines.append("Readiness & Forecast: n/a.")
+
+    if not sched_up.empty:
+        up_lines = []
+        for _, r in sched_up.iterrows():
+            start_h = dt.datetime.utcfromtimestamp(r["start_ts"]).strftime("%Y-%m-%d %H:%M")
+            up_lines.append(f"{start_h}: {r.get('title','?')} ({r.get('block_type','?')}, {r.get('duration_min','?')}m)")
+        lines.append("Schedule Upcoming: " + "; ".join(up_lines))
+    else:
+        lines.append("Schedule Upcoming: none.")
+    if not sched_past.empty:
+        past_lines = []
+        for _, r in sched_past.iterrows():
+            end_h = dt.datetime.utcfromtimestamp(r["end_ts"]).strftime("%Y-%m-%d %H:%M")
+            past_lines.append(f"{end_h}: {r.get('title','?')} ({r.get('block_type','?')})")
+        lines.append("Schedule Completed: " + "; ".join(past_lines))
+    else:
+        lines.append("Schedule Completed: none in window.")
+
+    if not long_df.empty:
+        long_lines = []
+        for _, r in long_df.iterrows():
+            long_lines.append(f"{r.get('title','?')} — {r.get('artist','?')} (HCE {r.get('mean_HCE',0):.2f})")
+        lines.append("Longitudinal Trends: " + "; ".join(long_lines))
+    else:
+        lines.append("Longitudinal Trends: n/a.")
+
+    return "\n".join(lines)
 
 
 # Client-side callbacks for voice features

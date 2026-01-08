@@ -368,6 +368,7 @@ class SpotifyNowPlayingLogger:
                 pass
             try:
                 self._compute_waveform(self._current_track_session_id, end_ts)
+                self._compute_waveform_points(self._current_track_session_id, end_ts)
             except Exception:
                 pass
         self._current_track_session_id = None
@@ -522,6 +523,77 @@ class SpotifyNowPlayingLogger:
             duration=duration,
             bin_sec=bin_sec,
             waveform=vals,
+        )
+
+    def _compute_waveform_points(self, track_session_id: int, end_ts: float) -> None:
+        """Build per-second HCE/Q/X points from buckets and persist rows for deep analysis."""
+        if not self._current_start_ts or not self._current_track_id:
+            return
+        start_ts = self._current_start_ts
+        track_id = self._current_track_id
+        title = self._current_title or ""
+        artist = self._current_artist or ""
+        duration = max(self._current_duration_sec or (end_ts - start_ts), end_ts - start_ts, 1.0)
+        bin_sec = 1.0
+        length = int(duration) + 1
+        buckets = storage.get_buckets_between(start_ts - 5.0, end_ts + 5.0, session_id=self._session_id)
+        h_vals = [float("nan")] * length
+        q_vals = [float("nan")] * length
+        x_vals = [float("nan")] * length
+        r_vals = [float("nan")] * length
+        for b in buckets:
+            if b.get("track_uri") and b.get("track_uri") != track_id:
+                continue
+            rel = b.get("relative_seconds")
+            if rel is None:
+                rel = float(b.get("bucket_start_ts", 0.0) - start_ts)
+            idx_start = int(rel // bin_sec)
+            idx_end = int(((b.get("bucket_end_ts") or (start_ts + duration)) - start_ts) // bin_sec)
+            idx_end = min(idx_end, length - 1)
+            for idx in range(max(0, idx_start), idx_end + 1):
+                h_vals[idx] = float(b.get("mean_HCE") or 0.0)
+                q_vals[idx] = float(b.get("mean_Q") or 0.0)
+                x_vals[idx] = float(b.get("mean_X") or 0.0)
+                r_vals[idx] = float(b.get("valid_fraction") or 0.0)
+        # simple forward/back fill to smooth gaps
+        def _fill(vals, default=0.0):
+            last = default
+            for i in range(length):
+                if vals[i] == vals[i]:
+                    last = vals[i]
+                else:
+                    vals[i] = last
+            last = default
+            for i in range(length - 1, -1, -1):
+                if vals[i] == vals[i]:
+                    last = vals[i]
+                else:
+                    vals[i] = last
+            return vals
+
+        h_vals = _fill(h_vals, 0.0)
+        q_vals = _fill(q_vals, 0.0)
+        x_vals = _fill(x_vals, 0.0)
+        r_vals = _fill(r_vals, 0.0)
+
+        points = []
+        for i in range(length):
+            points.append(
+                {
+                    "rel_sec": float(i),
+                    "hce": h_vals[i],
+                    "q": q_vals[i],
+                    "x": x_vals[i],
+                    "reliability": r_vals[i],
+                }
+            )
+        storage.insert_track_waveform_points(
+            track_id=track_id,
+            session_id=self._session_id,
+            title=title,
+            artist=artist,
+            start_ts=start_ts,
+            points=points,
         )
 
 
