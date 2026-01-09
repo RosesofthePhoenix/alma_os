@@ -943,6 +943,66 @@ def list_event_intervals(ts0: float, ts1: float, limit: int = 5000) -> List[Dict
         return _rows_to_dicts(cur)
 
 
+def backfill_event_intervals(max_events: int = 200, window_s: float = 300.0) -> None:
+    """
+    For events that do not yet have an entry in event_intervals, compute a window around the event
+    using buckets and store mean/peak metrics. Uses a symmetric window +/- window_s/2 (default 5 minutes total).
+    """
+    try:
+        with _connect() as conn:
+            cur = conn.execute(
+                """
+                SELECT e.id, e.ts, e.tags_json
+                FROM events e
+                WHERE e.ts IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM event_intervals i WHERE i.event_id = e.id
+                  )
+                ORDER BY e.ts DESC
+                LIMIT ?
+                """,
+                (max_events,),
+            )
+            rows = _rows_to_dicts(cur)
+    except Exception:
+        return
+    if not rows:
+        return
+    for ev in rows:
+        ts = ev.get("ts")
+        if ts is None:
+            continue
+        try:
+            start = float(ts) - window_s / 2.0
+            end = float(ts) + window_s / 2.0
+            buckets = get_buckets_between(start, end, session_id=None)
+            if buckets:
+                mean_x = float(np.nanmean([b.get("mean_X", 0.0) or 0.0 for b in buckets]))
+                mean_q = float(np.nanmean([b.get("mean_Q", 0.0) or 0.0 for b in buckets]))
+                mean_hce = float(np.nanmean([b.get("mean_HCE", 0.0) or 0.0 for b in buckets]))
+                peak_x = float(np.nanmax([b.get("mean_X", 0.0) or 0.0 for b in buckets]))
+                peak_q = float(np.nanmax([b.get("mean_Q", 0.0) or 0.0 for b in buckets]))
+                peak_hce = float(np.nanmax([b.get("mean_HCE", 0.0) or 0.0 for b in buckets]))
+            else:
+                mean_x = mean_q = mean_hce = peak_x = peak_q = peak_hce = None
+            insert_event_interval(
+                event_id=int(ev.get("id")) if ev.get("id") is not None else None,
+                start_ts=start,
+                end_ts=end,
+                duration=end - start,
+                mean_x=mean_x,
+                mean_q=mean_q,
+                mean_hce=mean_hce,
+                peak_x=peak_x,
+                peak_q=peak_q,
+                peak_hce=peak_hce,
+                tags_json=ev.get("tags_json") or "",
+                source="events_backfill",
+            )
+        except Exception:
+            continue
+
+
 def list_track_waveform_points(track_id: str, limit_sessions: int = 3, limit_points: int = 5000) -> List[Dict[str, object]]:
     if not track_id:
         return []

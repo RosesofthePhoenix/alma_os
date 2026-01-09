@@ -1044,6 +1044,7 @@ def _oracle_context():
     # Event intervals (recent)
     try:
         now = time.time()
+        storage.backfill_event_intervals(max_events=200, window_s=300.0)
         intervals = storage.list_event_intervals(now - 86400, now, limit=500)
         if intervals:
             ctx["event_intervals"] = intervals
