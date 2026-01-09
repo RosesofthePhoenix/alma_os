@@ -286,18 +286,30 @@ def _build_uniform_sections(duration: float, means: Dict[str, float]) -> pd.Data
     return pd.DataFrame(rows)
 
 
-def _historical_hce_series(track_id: str, bin_sec: float = 1.0, max_sessions: int = 80) -> Tuple[pd.DataFrame, float]:
-    """Aggregate historical HCE across sessions into per-second bins; returns df and max duration."""
+def _smooth_series(series: pd.Series, window: int = 5) -> pd.Series:
+    if series.empty:
+        return series
+    return series.rolling(window=window, center=True, min_periods=1).mean()
+
+
+def _historical_hce_series(track_id: str, bin_sec: float = 1.0, max_sessions: int = 80) -> Tuple[pd.DataFrame, pd.DataFrame, float, Optional[float]]:
+    """Aggregate historical per-second metrics; returns (Q_smooth_df, HCE_df, max_dur, hce_p95)."""
     # Prefer stored per-second waveform points
     try:
         wf_points = storage.list_track_waveform_points(track_id, limit_sessions=3, limit_points=8000)
         if wf_points:
             df = pd.DataFrame(wf_points)
-            agg = df.groupby("rel_sec")["hce"].mean().reset_index().rename(columns={"rel_sec": "t", "hce": "HCE"})
-            max_dur = agg["t"].max() if not agg.empty else 0.0
-            return agg, max_dur
+            agg_q = df.groupby("rel_sec")["q"].mean().reset_index().rename(columns={"rel_sec": "t", "q": "Q"})
+            agg_h = df.groupby("rel_sec")["hce"].mean().reset_index().rename(columns={"rel_sec": "t", "hce": "HCE"})
+            agg_q["Q"] = _smooth_series(agg_q["Q"], window=5)
+            agg_h["HCE_LOG"] = np.log10(agg_h["HCE"].clip(lower=0) + 1.0)
+            hce_p95 = float(np.nanpercentile(agg_h["HCE"], 95)) if not agg_h.empty else None
+            max_dur = float(agg_q["t"].max() if not agg_q.empty else agg_h["t"].max() if not agg_h.empty else 0.0)
+            return agg_q, agg_h, max_dur, hce_p95
     except Exception:
         pass
+
+    # Fallback from buckets if no stored points
     try:
         with sqlite3.connect(config.DB_PATH) as conn:
             sess_df = pd.read_sql_query(
@@ -315,11 +327,12 @@ def _historical_hce_series(track_id: str, bin_sec: float = 1.0, max_sessions: in
                 params=(track_id, max_sessions),
             )
     except Exception:
-        return pd.DataFrame(columns=["t", "HCE"]), 0.0
+        return pd.DataFrame(columns=["t", "Q"]), pd.DataFrame(columns=["t", "HCE"]), 0.0, None
     if sess_df.empty:
-        return pd.DataFrame(columns=["t", "HCE"]), 0.0
+        return pd.DataFrame(columns=["t", "Q"]), pd.DataFrame(columns=["t", "HCE"]), 0.0, None
 
-    bins: Dict[int, list] = {}
+    bins_q: Dict[int, list] = {}
+    bins_h: Dict[int, list] = {}
     max_duration = 0.0
     for _, row in sess_df.iterrows():
         s0 = float(row.get("start_ts") or 0.0)
@@ -330,30 +343,46 @@ def _historical_hce_series(track_id: str, bin_sec: float = 1.0, max_sessions: in
         for b in buckets:
             rel = float(b.get("bucket_start_ts", 0.0) - s0)
             idx = int(rel // bin_sec)
-            bins.setdefault(idx, []).append(b.get("mean_HCE", 0.0) or 0.0)
+            bins_q.setdefault(idx, []).append(b.get("mean_Q", 0.0) or 0.0)
+            bins_h.setdefault(idx, []).append(b.get("mean_HCE", 0.0) or 0.0)
 
-    if not bins:
-        return pd.DataFrame(columns=["t", "HCE"]), max_duration
+    if not bins_q and not bins_h:
+        return pd.DataFrame(columns=["t", "Q"]), pd.DataFrame(columns=["t", "HCE"]), max_duration, None
+
     max_idx = int(max_duration // bin_sec) + 1
     ts = np.arange(0, max_idx * bin_sec, bin_sec)
-    vals = np.full_like(ts, np.nan, dtype=float)
-    for idx, arr in bins.items():
-        if idx < 0 or idx >= len(vals):
-            continue
-        vals[idx] = float(np.nanmean(arr))
-    series = pd.Series(vals, index=ts)
-    series_interp = series.interpolate(limit_direction="both")
-    return pd.DataFrame({"t": series_interp.index, "HCE": series_interp.values}), max_duration
+    q_vals = np.full_like(ts, np.nan, dtype=float)
+    h_vals = np.full_like(ts, np.nan, dtype=float)
+    for idx, arr in bins_q.items():
+        if 0 <= idx < len(q_vals):
+            q_vals[idx] = float(np.nanmean(arr))
+    for idx, arr in bins_h.items():
+        if 0 <= idx < len(h_vals):
+            h_vals[idx] = float(np.nanmean(arr))
+    q_series = pd.Series(q_vals, index=ts).interpolate(limit_direction="both")
+    h_series = pd.Series(h_vals, index=ts).interpolate(limit_direction="both")
+    q_df = pd.DataFrame({"t": q_series.index, "Q": _smooth_series(q_series, window=5)})
+    h_df = pd.DataFrame({"t": h_series.index, "HCE": h_series.values})
+    h_df["HCE_LOG"] = np.log10(h_df["HCE"].clip(lower=0) + 1.0)
+    hce_p95 = float(np.nanpercentile(h_df["HCE"], 95)) if not h_df.empty else None
+    return q_df, h_df, max_duration, hce_p95
 
 
-def _live_hce_series(track_id: str, duration_hint: float, bin_sec: float = 1.0) -> Tuple[pd.DataFrame, Optional[float], Optional[str], int]:
-    """Live per-second HCE for the current playing session (time-windowed by playback duration)."""
+def _live_hce_series(track_id: str, duration_hint: float, bin_sec: float = 1.0) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Optional[float], Optional[str], int]:
+    """Live per-second smoothed Q/X/HCE for the current playing session."""
     try:
         latest = storage.get_latest_spotify(session_id=None)
     except Exception:
         latest = None
     if not latest or not latest.get("is_playing") or latest.get("track_id") != track_id:
-        return pd.DataFrame(columns=["t", "HCE"]), None, None, 0
+        return (
+            pd.DataFrame(columns=["t", "Q"]),
+            pd.DataFrame(columns=["t", "HCE"]),
+            pd.DataFrame(columns=["t", "X"]),
+            None,
+            None,
+            0,
+        )
 
     progress_ms = latest.get("progress_ms") or 0
     duration_ms = latest.get("duration_ms") or 1
@@ -362,38 +391,66 @@ def _live_hce_series(track_id: str, duration_hint: float, bin_sec: float = 1.0) 
 
     session_row = storage.get_latest_track_session(track_id)
     if not session_row:
-        return pd.DataFrame(columns=["t", "HCE"]), progress_sec, None, 0
+        return (
+            pd.DataFrame(columns=["t", "Q"]),
+            pd.DataFrame(columns=["t", "HCE"]),
+            pd.DataFrame(columns=["t", "X"]),
+            progress_sec,
+            None,
+            0,
+        )
     start_ts = float(session_row.get("start_ts") or 0.0)
     # pull buckets in window, any session, and filter by track_uri match when available
     buckets = storage.get_buckets_between(start_ts - 30.0, start_ts + duration_cap + bin_sec + 30.0, session_id=None)
 
-    bins: Dict[int, list] = {}
+    # Build dense per-second bins up to current progress for Q and HCE
+    max_idx = int(np.ceil(max(progress_sec, bin_sec) / bin_sec)) + 1
+    ts = np.arange(0, max_idx * bin_sec, bin_sec)
+    q_vals = np.full(len(ts), np.nan, dtype=float)
+    h_vals = np.full(len(ts), np.nan, dtype=float)
+    x_vals = np.full(len(ts), np.nan, dtype=float)
     live_bucket_count = 0
     for b in buckets:
         if b.get("track_uri") and b.get("track_uri") != track_id:
             continue
-        # prefer stored relative_seconds if present
-        rel = b.get("relative_seconds")
-        if rel is None:
-            rel = float(b.get("bucket_start_ts", 0.0) - start_ts)
-        rel = float(rel)
-        if rel < -10.0 or rel > duration_cap + 30.0:
+        rel_start = b.get("relative_seconds")
+        if rel_start is None:
+            rel_start = float(b.get("bucket_start_ts", 0.0) - start_ts)
+        rel_start = float(rel_start)
+        rel_end = b.get("bucket_end_ts")
+        if rel_end is not None:
+            rel_end = float(rel_end - start_ts)
+        else:
+            rel_end = rel_start + bin_sec
+        if rel_end < -10.0 or rel_start > duration_cap + 30.0:
             continue
-        idx = int(rel // bin_sec)
-        bins.setdefault(idx, []).append(b.get("mean_HCE", 0.0) or 0.0)
+        idx_start = int(np.floor(rel_start / bin_sec))
+        idx_end = int(np.floor(rel_end / bin_sec))
+        idx_start = max(idx_start, 0)
+        idx_end = min(idx_end, len(ts) - 1)
+        q_val = float(b.get("mean_Q", 0.0) or 0.0)
+        h_val = float(b.get("mean_HCE", 0.0) or 0.0)
+        x_val = float(b.get("mean_X", 0.0) or 0.0)
+        for idx in range(idx_start, idx_end + 1):
+            q_vals[idx] = q_val
+            h_vals[idx] = h_val
+            x_vals[idx] = x_val
         live_bucket_count += 1
-    max_idx = int(progress_sec // bin_sec) + 1
-    ts = np.arange(0, max_idx * bin_sec, bin_sec)
-    vals = np.full_like(ts, np.nan, dtype=float)
-    for idx, arr in bins.items():
-        if idx < len(vals):
-            vals[idx] = float(np.nanmean(arr))
-    series = pd.Series(vals, index=ts)
-    series = series.ffill()
-    series_interp = series.interpolate(limit_direction="forward")
-    if series_interp.isna().any():
-        series_interp = series_interp.fillna(method="ffill").fillna(0.0)
-    live_df = pd.DataFrame({"t": series_interp.index, "HCE": series_interp.values})
+    q_series = pd.Series(q_vals, index=ts).ffill().bfill()
+    h_series = pd.Series(h_vals, index=ts).ffill().bfill()
+    x_series = pd.Series(x_vals, index=ts).ffill().bfill()
+    q_series = _smooth_series(q_series, window=5)
+    x_series = _smooth_series(x_series, window=5)
+    h_series = h_series.interpolate(limit_direction="both")
+    if h_series.isna().any():
+        h_series = h_series.fillna(0.0)
+    if q_series.isna().any():
+        q_series = q_series.fillna(0.0)
+    if x_series.isna().any():
+        x_series = x_series.fillna(0.0)
+    live_q = pd.DataFrame({"t": ts, "Q": q_series.values})
+    live_h = pd.DataFrame({"t": ts, "HCE": h_series.values})
+    live_x = pd.DataFrame({"t": ts, "X": x_series.values})
 
     live_section = None
     try:
@@ -408,7 +465,7 @@ def _live_hce_series(track_id: str, duration_hint: float, bin_sec: float = 1.0) 
     except Exception:
         pass
 
-    return live_df, progress_sec, live_section, live_bucket_count
+    return live_q, live_h, live_x, progress_sec, live_section, live_bucket_count
 
 
 layout = dbc.Container(
@@ -422,10 +479,21 @@ layout = dbc.Container(
                         dbc.Input(id="ma-search-text", placeholder="Search all tracks (title/artist)", className="mb-2", debounce=True),
                         dcc.Dropdown(id="ma-search-results", placeholder="Search results", className="mb-3"),
                         dbc.Checklist(
-                            id="ma-show-all-hist",
-                            options=[{"label": "Show all historical listens", "value": "all"}],
-                            value=[],
+                            id="ma-metric-toggle",
+                            options=[
+                                {"label": "Rolling Q (5s)", "value": "q"},
+                                {"label": "Rolling X (5s)", "value": "x"},
+                                {"label": "Rolling HCE (5s)", "value": "hce"},
+                            ],
+                            value=["q"],
                             inline=True,
+                            switch=True,
+                            className="mb-2",
+                        ),
+                        dbc.Checklist(
+                            id="ma-highlight-trans",
+                            options=[{"label": "Highlight Transcendence", "value": "on"}],
+                            value=["on"],
                             switch=True,
                             className="mb-2",
                         ),
@@ -433,7 +501,7 @@ layout = dbc.Container(
                         html.Div(id="ma-track-table", className="mt-2"),
                         html.Div(id="ma-oracle-mini", className="mt-2 text-info"),
                         html.Div(id="ma-status", className="small text-muted mt-1"),
-                        dcc.Interval(id="ma-interval", interval=8000, n_intervals=0),
+                        dcc.Interval(id="ma-interval", interval=1500, n_intervals=0),
                     ]
                 ),
             ],
@@ -493,9 +561,10 @@ def _search_options(query):
     Input("ma-track-select", "value"),
     Input("ma-track-plot", "clickData"),
     Input("ma-interval", "n_intervals"),
-    Input("ma-show-all-hist", "value"),
+    Input("ma-metric-toggle", "value"),
+    Input("ma-highlight-trans", "value"),
 )
-def _render_track(track_id, click_data, _n, show_hist):
+def _render_track(track_id, click_data, _n, metrics_selected, highlight_trans):
     if not track_id:
         return go.Figure(), html.Div("Select a track to view."), "", ""
     track_means, duration, title, artist = _latest_track_stats(track_id)
@@ -504,23 +573,9 @@ def _render_track(track_id, click_data, _n, show_hist):
         df = _build_uniform_sections(duration, track_means)
     track_mean = track_means.get("mean_HCE", 0.0) or (df["mean_HCE"].mean() if not df.empty else 0.0)
     avg_hce = df["mean_HCE"].mean() if not df.empty else 0.0
-    # Per-second HCE lines
-    hist_series, hist_max_dur = _historical_hce_series(track_id, bin_sec=1.0)
-    hist_waveforms = []
-    if show_hist and "all" in show_hist:
-        try:
-            wave_rows = storage.list_track_waveforms(track_id, limit=20)
-            for row in wave_rows:
-                wf = row.get("waveform") or []
-                if not wf:
-                    continue
-                dur = row.get("duration") or len(wf)
-                ts = np.arange(0, len(wf))
-                hist_waveforms.append((ts, wf))
-        except Exception:
-            pass
-    live_series, progress_rel, live_section_label, live_bucket_count = _live_hce_series(track_id, duration_hint=duration, bin_sec=1.0)
-    duration_final = max(duration, hist_max_dur, (progress_rel or 0.0), 1.0)
+    # Live per-second lines only (pure live hero)
+    live_q, live_h, live_x, progress_rel, live_section_label, live_bucket_count = _live_hce_series(track_id, duration_hint=duration, bin_sec=1.0)
+    duration_final = max(duration, (progress_rel or 0.0), 1.0)
 
     # Color scale for sections
     hce_min = df["mean_HCE"].min()
@@ -551,11 +606,11 @@ def _render_track(track_id, click_data, _n, show_hist):
         max_rel = df["section_rel_end"].max()
     except Exception:
         max_rel = 0
-    t = np.linspace(0, max(max_rel, duration_final, 1.0), num=300)
-    waveform = 0.6 * np.sin(2 * np.pi * t / max(max_rel, 1.0) * 3) + 0.25 * np.sin(2 * np.pi * t / max(max_rel, 1.0) * 7)
+    t_back = np.linspace(0, max(max_rel, duration_final, 1.0), num=300)
+    waveform = 0.6 * np.sin(2 * np.pi * t_back / max(max_rel, 1.0) * 3) + 0.25 * np.sin(2 * np.pi * t_back / max(max_rel, 1.0) * 7)
     fig.add_trace(
         go.Scatter(
-            x=t,
+            x=t_back,
             y=waveform,
             mode="lines",
             line=dict(color="rgba(120,120,120,0.12)"),
@@ -564,94 +619,42 @@ def _render_track(track_id, click_data, _n, show_hist):
             showlegend=False,
         )
     )
-    # Historical HCE line (faint) and waveform overlays
-    if not hist_series.empty:
+
+    # Live rolling lines (Q/X/HCE) only
+    metrics_selected = metrics_selected or ["q"]
+    color_map = {"q": "#d7b34d", "x": "#ff7f7f", "hce": "#9bd19d"}
+    label_map = {"q": "Rolling Q (5s)", "x": "Rolling X (5s)", "hce": "Rolling HCE (5s)"}
+
+    def _dot_color(val: float) -> str:
+        if val is None or not np.isfinite(val):
+            return "#d7b34d"
+        if val < 0.3:
+            return "#4da6ff"
+        if val < 0.8:
+            return "#d7b34d"
+        return "#ff7ad1"
+
+    for metric in ["q", "x", "hce"]:
+        if metric not in metrics_selected:
+            continue
+        df_live = {"q": live_q, "x": live_x, "hce": live_h}[metric]
+        col = {"q": "Q", "x": "X", "hce": "HCE"}[metric]
+        if df_live.empty:
+            continue
+        last_val = float(df_live[col].iloc[-1]) if not df_live.empty else None
         fig.add_trace(
             go.Scatter(
-                x=hist_series["t"],
-                y=hist_series["HCE"],
-                mode="lines",
-                line=dict(color="rgba(215,179,77,0.30)", width=3, dash="dash"),
-                name="HCE (historical)",
-                hovertemplate="t=%{x:.1f}s<br>HCE=%{y:.2f}<extra></extra>",
-            )
-        )
-    if hist_waveforms:
-        for ts_arr, wf in hist_waveforms:
-            fig.add_trace(
-                go.Scatter(
-                    x=ts_arr,
-                    y=wf,
-                    mode="lines",
-                    line=dict(color="rgba(215,179,77,0.12)", width=2),
-                    name="HCE (past listen)",
-                    hoverinfo="skip",
-                    showlegend=False,
-                )
-            )
-        # projection to full duration
-        last_val = hist_series["HCE"].iloc[-1] if not hist_series.empty else track_mean
-        if duration_final > hist_series["t"].max():
-            fig.add_trace(
-                go.Scatter(
-                    x=[hist_series["t"].max(), duration_final],
-                    y=[last_val, last_val],
-                    mode="lines",
-                    line=dict(color="rgba(215,179,77,0.15)", width=2, dash="dash"),
-                    showlegend=False,
-                    hoverinfo="skip",
-                )
-            )
-    elif track_mean > 0:
-        # fallback flat historical line from library avg
-        fig.add_trace(
-            go.Scatter(
-                x=[0, duration_final],
-                y=[track_mean, track_mean],
-                mode="lines",
-                line=dict(color="rgba(215,179,77,0.15)", width=2, dash="dash"),
-                name="HCE (library avg)",
-                hoverinfo="skip",
-            )
-        )
-    # Live HCE line (bright) or placeholder
-    if not live_series.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=live_series["t"],
-                y=live_series["HCE"],
+                x=df_live["t"],
+                y=df_live[col],
                 mode="lines+markers",
-                line=dict(color="#d7b34d", width=4),
-                marker=dict(color="#ffd15c", size=6),
-                name="HCE (live)",
-                hovertemplate="t=%{x:.1f}s<br>HCE=%{y:.2f}<extra></extra>",
+                line=dict(color=color_map[metric], width=4),
+                marker=dict(color=_dot_color(last_val), size=7, symbol="circle"),
+                name=f"{label_map[metric]} (live)",
+                hovertemplate="t=%{x:.1f}s<br>value=%{y:.3f}<extra></extra>",
             )
         )
-        # Portal pulse markers for HCE > 1.0
-        live_peaks = live_series[live_series["HCE"] > 1.0]
-        if not live_peaks.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=live_peaks["t"],
-                    y=live_peaks["HCE"],
-                    mode="markers",
-                    marker=dict(symbol="star", color="#ffd700", size=10, line=dict(color="#d7b34d", width=1)),
-                    name="Portal (HCE>1.0)",
-                    hovertemplate="Fractal Portal: HCE=%{y:.2f}<br>t=%{x:.1f}s<extra></extra>",
-                )
-            )
-    else:
-        fig.add_trace(
-            go.Scatter(
-                x=base_x,
-                y=[track_mean or 0, track_mean or 0],
-                mode="lines",
-                line=dict(color="rgba(215,179,77,0.18)", width=2),
-                name="HCE (placeholder)",
-                hoverinfo="skip",
-                showlegend=False,
-            )
-        )
+
+    if all(df.empty for df in [live_q, live_x, live_h]):
         fig.add_annotation(
             x=duration_final * 0.5,
             y=0,
@@ -659,6 +662,28 @@ def _render_track(track_id, click_data, _n, show_hist):
             showarrow=False,
             font=dict(color="#aaaaaa"),
         )
+
+    # Transcendence highlight (live only)
+    highlight_on = highlight_trans and ("on" in highlight_trans)
+    trans_thresh = None
+    if not live_h.empty:
+        try:
+            trans_thresh = float(np.nanpercentile(live_h["HCE"], 90))
+        except Exception:
+            trans_thresh = None
+    if highlight_on and trans_thresh and not live_h.empty:
+        live_trans = live_h[live_h["HCE"] >= trans_thresh]
+        if not live_trans.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=live_trans["t"],
+                    y=live_trans["HCE"],
+                    mode="markers",
+                    marker=dict(color="#ff9ad5", size=8, symbol="circle", line=dict(color="#ff6fb8", width=1)),
+                    name="Transcendence (top live)",
+                    hovertemplate="HCE=%{y:.2f} at t=%{x:.1f}s<extra></extra>",
+                )
+            )
     for _, r in df.iterrows():
         fig.add_vrect(
             x0=r["section_rel_start"],
@@ -709,32 +734,27 @@ def _render_track(track_id, click_data, _n, show_hist):
             name="X (section avg)",
         )
     )
-    # Peak annotations for HCE > 1.0
-    combined_parts = []
-    if not hist_series.empty:
-        combined_parts.append(hist_series)
-    if not live_series.empty:
-        combined_parts.append(live_series)
-    combined = pd.concat(combined_parts, ignore_index=True) if combined_parts else pd.DataFrame(columns=["t", "HCE"])
-    if not combined.empty:
-        peaks = combined[combined["HCE"] > 1.0]
+    # Peak annotations for HCE > 1.0 (dots, not stars) — live only
+    if not live_h.empty:
+        peaks = live_h[live_h["HCE"] > 1.0]
         if not peaks.empty:
             fig.add_trace(
                 go.Scatter(
                     x=peaks["t"],
                     y=peaks["HCE"],
                     mode="markers",
-                    marker=dict(symbol="star", color="#ffd700", size=10, line=dict(color="#d7b34d", width=1)),
+                    marker=dict(symbol="circle", color="#ffd700", size=8, line=dict(color="#d7b34d", width=1)),
                     name="Fractal Portal (HCE>1.0)",
                     hovertemplate="Fractal Portal: HCE=%{y:.2f}<br>t=%{x:.1f}s<extra></extra>",
                 )
             )
     fig.update_layout(
         template="plotly_dark",
-        title="Live HCE waveform — your personal resonance trace",
+        title="Live Resonance — rolling Q/X/HCE (pure live)",
         xaxis_title="Seconds (relative)",
-        yaxis_title="mean_HCE",
+        yaxis_title="Value",
         height=480,
+        legend=dict(x=1.02, y=1, bgcolor="rgba(0,0,0,0)", orientation="v"),
     )
     if progress_rel is not None:
         fig.add_vline(x=progress_rel, line=dict(color="#ffbf00", width=2, dash="dash"), name="Now")
@@ -770,31 +790,33 @@ def _render_track(track_id, click_data, _n, show_hist):
         return f"text-warning {base}" if src == "live" else base
 
     # Recompute per-section means from binned HCE (live preferred)
-    mapped_points = int(live_series["HCE"].count()) if not live_series.empty else int(hist_series["HCE"].count()) if not hist_series.empty else 0
+    mapped_points = (
+        int(live_q["Q"].count()) + int(live_x["X"].count()) + int(live_h["HCE"].count())
+        if not all(df.empty for df in [live_q, live_x, live_h])
+        else 0
+    )
     total_bins = int(np.ceil(duration_final)) if duration_final else 0
     bins_edges = np.linspace(0, max(duration_final, 1.0), 6)
     per_section_rows = []
-    running_mean = (
-        float(live_series["HCE"].mean())
-        if not live_series.empty
-        else float(hist_series["HCE"].mean()) if not hist_series.empty else track_mean
-    )
+    running_mean_candidates = []
+    if not live_q.empty:
+        running_mean_candidates.append(float(live_q["Q"].mean()))
+    if not live_h.empty:
+        running_mean_candidates.append(float(live_h["HCE"].mean()))
+    if not live_x.empty:
+        running_mean_candidates.append(float(live_x["X"].mean()))
+    running_mean = float(np.nanmean(running_mean_candidates)) if running_mean_candidates else track_mean
     running_mean = running_mean or track_mean
     personal_low = min([v for v in [running_mean, track_mean] if v]) if (running_mean or track_mean) else None
     portal_count = 0
     for i in range(5):
         start = bins_edges[i]
         end = bins_edges[i + 1]
-        mask_live = (not live_series.empty) and (live_series["t"] >= start) & (live_series["t"] < end)
-        mask_hist = (not hist_series.empty) and (hist_series["t"] >= start) & (hist_series["t"] < end)
-        vals_live = live_series.loc[mask_live, "HCE"].dropna() if isinstance(mask_live, pd.Series) else pd.Series([], dtype=float)
-        vals_hist = hist_series.loc[mask_hist, "HCE"].dropna() if isinstance(mask_hist, pd.Series) else pd.Series([], dtype=float)
+        mask_live = (not live_h.empty) and (live_h["t"] >= start) & (live_h["t"] < end)
+        vals_live = live_h.loc[mask_live, "HCE"].dropna() if isinstance(mask_live, pd.Series) else pd.Series([], dtype=float)
         if len(vals_live) > 0:
             hce_mean = float(vals_live.mean())
             gran_source = "live"
-        elif len(vals_hist) > 0:
-            hce_mean = float(vals_hist.mean())
-            gran_source = "historical"
         else:
             hce_mean = running_mean if running_mean is not None else 0.0
             gran_source = "track avg"
@@ -874,7 +896,7 @@ def _render_track(track_id, click_data, _n, show_hist):
         size="sm",
         className="mt-2",
     )
-    live_bins = int(live_series["HCE"].count()) if not live_series.empty else 0
+    live_bins = mapped_points
     total_bins = int(np.ceil(duration_final)) if duration_final else 0
     granularity = f"Granularity: live seconds mapped {live_bins}/{total_bins} (building resonance)"
     early_note = ""
@@ -882,10 +904,7 @@ def _render_track(track_id, click_data, _n, show_hist):
         early_note = "Resonance awakening — play longer for depth."
     footer = html.Div(
         [
-            html.Div(
-                "Resonance building — gold line grows as your live HCE arrives. Estimated sections shown when Spotify analysis is restricted.",
-                className="text-muted small",
-            ),
+            html.Div("Resonance building — live rolling metrics only (pure nowcast).", className="text-muted small"),
             html.Div(granularity, className="text-muted small"),
             (html.Div(early_note, className="text-warning small") if early_note else None),
             html.Div(
@@ -909,7 +928,7 @@ def _render_track(track_id, click_data, _n, show_hist):
             f"[media_alchemy] track={track_id} title={title} artist={artist} sessions={session_count} "
             f"track_mean={track_means.get('mean_HCE',0):.2f} variation={variation:.2f} "
             f"section_source={section_source_note} top_lift={top_lift:+.1f}% "
-            f"hist_points={len(hist_series)} live_points={len(live_series)} mapped_points={mapped_points} "
+            f"live_points={mapped_points} "
             f"sections={[(r.get('label'), r.get('hce'), r.get('src')) for r in per_section_rows]}",
             flush=True,
         )
@@ -956,7 +975,7 @@ def _render_track(track_id, click_data, _n, show_hist):
     except Exception:
         pass
 
-    status_txt = f"{section_source_note}; sessions={session_count}; live={live_section_label or 'n/a'}"
+    status_txt = f"{section_source_note}; live_section={live_section_label or 'n/a'}; metrics={metrics_selected}"
     children = [table, footer]
     if radar_fig:
         children.insert(0, dcc.Graph(figure=radar_fig, style={"height": "300px"}))

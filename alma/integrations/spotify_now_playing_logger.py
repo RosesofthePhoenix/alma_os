@@ -19,7 +19,7 @@ _FEATURE_CACHE_PATH = config.SESSIONS_CURRENT_DIR / "audio_features_cache.json"
 
 
 class SpotifyNowPlayingLogger:
-    def __init__(self, poll_interval: float = 2.0) -> None:
+    def __init__(self, poll_interval: float = 1.0) -> None:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._running = False

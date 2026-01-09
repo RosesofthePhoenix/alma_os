@@ -171,23 +171,57 @@ def _ts_bounds(start_date: str, end_date: str) -> Tuple[float, float]:
 
 
 def _render_events(events: List[Dict[str, object]]) -> List[html.Div]:
-    rows = []
+    if not events:
+        return [html.Div("No events")]
+    items = []
     for idx, e in enumerate(events):
         ts = e.get("ts")
-        label = e.get("label") or ""
+        label = e.get("label") or e.get("kind") or "event"
         note = e.get("note") or ""
+        kind = e.get("kind") or ""
+        tags = e.get("tags_json") or {}
         ts_txt = dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
-        rows.append(
-            dbc.Button(
-                f"{ts_txt} — {label}" + (f" — {note}" if note else ""),
-                color="secondary",
-                outline=True,
-                size="sm",
-                className="mb-1 w-100 text-start",
-                id={"type": "mem-ev-btn", "index": idx},
+        header = f"{ts_txt} — {label}"
+        if note:
+            header += f" — {note}"
+
+        details = []
+        for pretty, key in [
+            ("Social", "social"),
+            ("Ambience", "ambience"),
+            ("Activity", "activity"),
+            ("Minutes", "minutes"),
+        ]:
+            val = tags.get(key)
+            if val not in [None, ""]:
+                details.append(f"{pretty}: {val}")
+        for pretty, key in [
+            ("Cocaine highness", "cocaine_highness"),
+            ("Ketamine highness", "ketamine_highness"),
+            ("Tusi highness", "tusi_highness"),
+            ("Tusi source", "tusi_source"),
+        ]:
+            val = tags.get(key)
+            if val not in [None, ""]:
+                details.append(f"{pretty}: {val}")
+
+        kind_txt = f"Kind: {kind}" if kind else ""
+        body_parts = [html.Div(kind_txt)] if kind_txt else []
+        if details:
+            body_parts.append(html.Ul([html.Li(d) for d in details], className="mb-1"))
+        if note:
+            body_parts.append(html.Div(f"Note: {note}", className="small text-muted"))
+        if not body_parts:
+            body_parts.append("No additional details")
+
+        items.append(
+            dbc.AccordionItem(
+                body_parts,
+                title=header,
+                item_id=str(idx),
             )
         )
-    return rows or [html.Div("No events")]
+    return [dbc.Accordion(items, start_collapsed=True, flush=True, always_open=False, id="mem-events-accordion")]
 
 
 def _render_quick_captures(events: List[Dict[str, object]]) -> List[html.Div]:

@@ -1,6 +1,11 @@
 # Changelog
 
-# Changelog
+## v0.8 — Real-time raw resonance + Spotify Insights + Oracle summaries
+- Live raw logger: every state compute now writes raw `Q_abs_raw`, `HCE_raw` (or `HCE` fallback), and `X` to a new `live_waveform_points` table (per-track, per-session, per-second) and to a new `state_summary` table (per-second X/Q/HCE with peak flags). Added `event_intervals` table for aligned event windows (schema ready; ingestion next).
+- Live Media: pure real-time traces only (no smoothing/legacy/buckets); uses `live_waveform_points` exclusively. Toggles relabeled to `Q_abs_raw`, `HCE_raw`, `X`; dashed segments show carry-forward gaps; solid lines show real samples; neon palette retained.
+- Spotify Insights: pure historical raw dense view from `live_waveform_points` only (legacy/bucket tracks hidden). Vertical stacked graphs for Track A/B with HCE/Q/X toggles; tables stacked full-width with fixed columns (artist, title, avg/peak X/Q/HCE); toggles sort order only. Forward-fill gaps are rendered with dashed segments.
+- Oracle context: now ingests recent `state_summary` peaks and recent `event_intervals` to enrich all modes with per-second peaks and event-aligned summaries (alongside prior gold-tier context).
+- Stability/polish: Fixed callback/linter issues after rewiring; ensured dropdowns are full-width; fixed height on graphs to avoid resize thrash.
 
 ## v0.7.8.1 — Global context log polish
 - Added a Mood slider (1–10) to the global Context Log; mood is persisted in saved tags.

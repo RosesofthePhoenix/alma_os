@@ -191,6 +191,57 @@ def init_db() -> None:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS live_waveform_points (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_id TEXT,
+                session_id TEXT,
+                title TEXT,
+                artist TEXT,
+                abs_ts REAL,
+                rel_sec REAL,
+                q_raw REAL,
+                hce_raw REAL,
+                x_raw REAL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS state_summary (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                ts REAL,
+                rel_sec REAL,
+                x REAL,
+                q REAL,
+                hce REAL,
+                is_peak INTEGER DEFAULT 0,
+                peak_kind TEXT,
+                source TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS event_intervals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id INTEGER,
+                start_ts REAL,
+                end_ts REAL,
+                duration REAL,
+                mean_x REAL,
+                mean_q REAL,
+                mean_hce REAL,
+                peak_x REAL,
+                peak_q REAL,
+                peak_hce REAL,
+                tags_json TEXT,
+                source TEXT
+            )
+            """
+        )
         try:
             cur.execute("ALTER TABLE track_sections ADD COLUMN source TEXT")
         except Exception:
@@ -739,6 +790,157 @@ def insert_track_waveform_points(
             ],
         )
         conn.commit()
+
+
+def insert_live_waveform_point(
+    track_id: str,
+    session_id: Optional[str],
+    title: str,
+    artist: str,
+    abs_ts: float,
+    rel_sec: float,
+    q_raw: Optional[float],
+    hce_raw: Optional[float],
+    x_raw: Optional[float],
+) -> None:
+    if not track_id or abs_ts is None:
+        return
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO live_waveform_points (track_id, session_id, title, artist, abs_ts, rel_sec, q_raw, hce_raw, x_raw)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                track_id,
+                session_id or "",
+                title or "",
+                artist or "",
+                abs_ts,
+                rel_sec,
+                q_raw,
+                hce_raw,
+                x_raw,
+            ),
+        )
+        conn.commit()
+
+
+def list_live_waveform_points(track_id: str, limit_points: int = 8000) -> List[Dict[str, object]]:
+    if not track_id:
+        return []
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT track_id, session_id, title, artist, abs_ts, rel_sec, q_raw, hce_raw, x_raw
+            FROM live_waveform_points
+            WHERE track_id = ?
+            ORDER BY abs_ts DESC, rel_sec ASC
+            LIMIT ?
+            """,
+            (track_id, limit_points),
+        )
+        return _rows_to_dicts(cur)
+
+
+def insert_state_summary(
+    session_id: Optional[str],
+    ts: float,
+    rel_sec: float,
+    x: Optional[float],
+    q: Optional[float],
+    hce: Optional[float],
+    is_peak: bool = False,
+    peak_kind: Optional[str] = None,
+    source: str = "",
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO state_summary (session_id, ts, rel_sec, x, q, hce, is_peak, peak_kind, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id or "",
+                ts,
+                rel_sec,
+                x,
+                q,
+                hce,
+                int(bool(is_peak)),
+                peak_kind or "",
+                source,
+            ),
+        )
+        conn.commit()
+
+
+def list_state_summary(ts0: float, ts1: float, limit: int = 10000) -> List[Dict[str, object]]:
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT session_id, ts, rel_sec, x, q, hce, is_peak, peak_kind, source
+            FROM state_summary
+            WHERE ts BETWEEN ? AND ?
+            ORDER BY ts ASC
+            LIMIT ?
+            """,
+            (ts0, ts1, limit),
+        )
+        return _rows_to_dicts(cur)
+
+
+def insert_event_interval(
+    event_id: Optional[int],
+    start_ts: float,
+    end_ts: float,
+    duration: float,
+    mean_x: Optional[float],
+    mean_q: Optional[float],
+    mean_hce: Optional[float],
+    peak_x: Optional[float],
+    peak_q: Optional[float],
+    peak_hce: Optional[float],
+    tags_json: str,
+    source: str = "",
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO event_intervals (event_id, start_ts, end_ts, duration, mean_x, mean_q, mean_hce, peak_x, peak_q, peak_hce, tags_json, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id if event_id is not None else None,
+                start_ts,
+                end_ts,
+                duration,
+                mean_x,
+                mean_q,
+                mean_hce,
+                peak_x,
+                peak_q,
+                peak_hce,
+                tags_json,
+                source,
+            ),
+        )
+        conn.commit()
+
+
+def list_event_intervals(ts0: float, ts1: float, limit: int = 5000) -> List[Dict[str, object]]:
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT event_id, start_ts, end_ts, duration, mean_x, mean_q, mean_hce, peak_x, peak_q, peak_hce, tags_json, source
+            FROM event_intervals
+            WHERE start_ts >= ? AND end_ts <= ?
+            ORDER BY start_ts ASC
+            LIMIT ?
+            """,
+            (ts0, ts1, limit),
+        )
+        return _rows_to_dicts(cur)
 
 
 def list_track_waveform_points(track_id: str, limit_sessions: int = 3, limit_points: int = 5000) -> List[Dict[str, object]]:

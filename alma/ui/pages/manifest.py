@@ -5,8 +5,9 @@ import pandas as pd
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, callback, dcc, html
+from dash import Input, Output, State, callback, dcc, html, ALL
 import plotly.express as px
+import plotly.graph_objects as go
 
 from alma.engine import storage
 from alma.app_state import registry
@@ -262,8 +263,37 @@ def layout() -> dbc.Container:
                 dbc.Row(
                     [
                         dbc.Col(dcc.Graph(id="manifest-trend", figure=px.line()), md=6),
-                        dbc.Col(dcc.Graph(id="manifest-calendar", figure=px.imshow([[0]])), md=6),
+                        dbc.Col(
+                            [
+                                dbc.RadioItems(
+                                    id="manifest-calendar-mode",
+                                    options=[
+                                        {"label": "Day", "value": "day"},
+                                        {"label": "Week", "value": "week"},
+                                        {"label": "Month", "value": "month"},
+                                    ],
+                                    value="day",
+                                    inline=True,
+                                    className="text-muted mb-1",
+                                ),
+                                dcc.Graph(id="manifest-calendar"),
+                            ],
+                            md=6,
+                        ),
                     ]
+                ),
+                dbc.Row(
+                    [
+                        dbc.Col(dcc.Graph(id="manifest-portal-trend"), md=6),
+                        dbc.Col(
+                            [
+                                html.Div("Top Portal Days", className="fw-semibold mb-1"),
+                                html.Div(id="manifest-portal-days", className="small text-secondary"),
+                            ],
+                            md=6,
+                        ),
+                    ],
+                    className="mt-2",
                 ),
                 html.Div("Sessions on selected day", className="fw-semibold mt-2"),
                 html.Div(id="manifest-day-list", className="small text-secondary"),
@@ -343,6 +373,8 @@ def toggle_substance(toggle_vals):
     Output("manifest-stat-portals", "children"),
     Output("manifest-trend", "figure"),
     Output("manifest-calendar", "figure"),
+    Output("manifest-portal-trend", "figure"),
+    Output("manifest-portal-days", "children"),
     Output("manifest-day-list", "children"),
     Output("manifest-top-tracks", "children"),
     Input("manifest-target-state", "value"),
@@ -352,13 +384,33 @@ def toggle_substance(toggle_vals):
     Input("manifest-custom-duration", "value"),
     Input("manifest-custom-name", "value"),
     Input("manifest-calendar", "clickData"),
+    Input("manifest-calendar-mode", "value"),
 )
-def describe_state(target, x_range, q_range, hce_range, dur_min, name, click_data):
+def describe_state(target, x_range, q_range, hce_range, dur_min, name, click_data, cal_mode):
     def match_bucket(b):
         x = b.get("mean_X") or 0
         qv = b.get("mean_Q") or 0
         h = b.get("mean_HCE") or 0
         std_q = b.get("std_Q") or 0
+        if target == "flow":
+            return 1.4 <= x <= 1.7 and 0.02 <= qv <= 0.04 and 0.4 <= h <= 1.0
+        if target == "relax":
+            return std_q < 0.1 and 1.6 <= x <= 1.8
+        if target == "transcend":
+            return h >= 1.0 and qv >= 0.04
+        if target == "custom" and x_range and q_range and hce_range:
+            return (
+                x_range[0] <= x <= x_range[1]
+                and q_range[0] <= qv <= q_range[1]
+                and hce_range[0] <= h <= hce_range[1]
+            )
+        return False
+
+    def match_point(row):
+        x = row.get("x") if isinstance(row, dict) else row["x"]
+        qv = row.get("q") if isinstance(row, dict) else row["q"]
+        h = row.get("hce") if isinstance(row, dict) else row["hce"]
+        std_q = row.get("std_q") if isinstance(row, dict) else 0
         if target == "flow":
             return 1.4 <= x <= 1.7 and 0.02 <= qv <= 0.04 and 0.4 <= h <= 1.0
         if target == "relax":
@@ -386,7 +438,7 @@ def describe_state(target, x_range, q_range, hce_range, dur_min, name, click_dat
         show_custom = {"display": "block"}
 
     now = time.time()
-    ts0 = now - 90 * 24 * 3600
+    ts0 = 0  # back-detect across all history
     ts1 = now
     buckets = storage.get_buckets_between(ts0, ts1, session_id=None)
     filt = [b for b in buckets if match_bucket(b)]
@@ -407,60 +459,214 @@ def describe_state(target, x_range, q_range, hce_range, dur_min, name, click_dat
         title="Weekly trend",
     )
 
-    day_counts = {}
+    day_minutes: dict[str, float] = {}
     for b in filt:
-        day = dt.datetime.utcfromtimestamp(b["bucket_start_ts"]).strftime("%Y-%m-%d")
-        day_counts[day] = day_counts.get(day, 0) + (b.get("bucket_end_ts", 0) - b.get("bucket_start_ts", 0)) / 60.0
-    days_sorted = sorted(day_counts.keys())
-    cal_values = [day_counts[d] for d in days_sorted] if days_sorted else [0]
-    cal_fig = px.imshow([cal_values], labels={"x": "Date", "color": "Minutes"}, aspect="auto")
-    cal_fig.update_xaxes(tickvals=list(range(len(days_sorted))), ticktext=days_sorted)
-    cal_fig.update_yaxes(showticklabels=False)
+        day = dt.datetime.utcfromtimestamp(b.get("bucket_start_ts", 0)).strftime("%Y-%m-%d")
+        day_minutes[day] = day_minutes.get(day, 0.0) + max(
+            0.0, (b.get("bucket_end_ts", 0) - b.get("bucket_start_ts", 0)) / 60.0
+        )
+
+    portal_count = 0
+    portal_daily: dict[str, int] = {}
+    portal_daily_peak: dict[str, float] = {}
+    try:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            wf = pd.read_sql_query(
+                "SELECT abs_ts, hce, q, x FROM track_waveform_points",
+                conn,
+            )
+        if not wf.empty:
+            wf["date"] = wf["abs_ts"].apply(lambda t: dt.datetime.utcfromtimestamp(t).strftime("%Y-%m-%d"))
+            wf["match"] = wf.apply(match_point, axis=1)
+            wf_match = wf[wf["match"]]
+            if not wf_match.empty:
+                counts = wf_match.groupby("date")["abs_ts"].count()
+                peaks = wf_match.groupby("date")["hce"].max()
+                for date_str, cnt in counts.items():
+                    day_minutes[date_str] = day_minutes.get(date_str, 0.0) + (cnt / 60.0)
+                    portal_daily[date_str] = portal_daily.get(date_str, 0) + int(cnt)
+                for date_str, peak_val in peaks.items():
+                    portal_daily_peak[date_str] = max(portal_daily_peak.get(date_str, 0.0), float(peak_val))
+                portal_count = int((wf_match["hce"] > 1.0).sum())
+    except Exception:
+        portal_count = 0
+        portal_daily = {}
+        portal_daily_peak = {}
+
+    def build_calendar(day_minutes_map: dict[str, float], mode: str) -> go.Figure:
+        if not day_minutes_map:
+            fig = go.Figure()
+            fig.update_layout(
+                title="No data yet",
+                paper_bgcolor="#0c0c12",
+                plot_bgcolor="#0c0c12",
+                font_color="#e0e0e0",
+            )
+            return fig
+        grouped: dict[str, float] = {}
+        if mode == "week":
+            for d, v in day_minutes_map.items():
+                wk = dt.datetime.fromisoformat(d).strftime("%Y-W%U")
+                grouped[wk] = grouped.get(wk, 0.0) + v
+            labels = sorted(grouped.keys())
+            values = [grouped[l] for l in labels]
+            custom = labels
+        elif mode == "month":
+            for d, v in day_minutes_map.items():
+                mo = d[:7]
+                grouped[mo] = grouped.get(mo, 0.0) + v
+            labels = sorted(grouped.keys())
+            values = [grouped[l] for l in labels]
+            custom = labels
+        else:  # day
+            labels = sorted(day_minutes_map.keys())
+            values = [day_minutes_map[l] for l in labels]
+            custom = labels
+        colorscale = [
+            [0.0, "#0c0c12"],
+            [0.3, "#4c3a1a"],
+            [0.6, "#b58a2c"],
+            [1.0, "#e4c36a"],
+        ]
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=[values],
+                x=labels,
+                y=[""],
+                customdata=custom,
+                colorscale=colorscale,
+                hovertemplate="%{customdata}<br>%{z:.1f} minutes<extra></extra>",
+                colorbar_title="Minutes",
+            )
+        )
+        fig.update_yaxes(showticklabels=False)
+        fig.update_layout(
+            paper_bgcolor="#0c0c12",
+            plot_bgcolor="#0c0c12",
+            font_color="#e0e0e0",
+            margin=dict(l=30, r=10, t=30, b=40),
+            title="State calendar",
+        )
+        return fig
+
+    cal_fig = build_calendar(day_minutes, cal_mode or "day")
+
+    # Portal trend by month
+    def build_portal_trend(portal_daily_map: dict[str, int]) -> go.Figure:
+        if not portal_daily_map:
+            fig = go.Figure()
+            fig.update_layout(
+                title="Portal trend (no data)",
+                paper_bgcolor="#0c0c12",
+                plot_bgcolor="#0c0c12",
+                font_color="#e0e0e0",
+            )
+            return fig
+        monthly: dict[str, int] = {}
+        for d, c in portal_daily_map.items():
+            mo = d[:7]
+            monthly[mo] = monthly.get(mo, 0) + c
+        months = sorted(monthly.keys())
+        vals = [monthly[m] for m in months]
+        fig = go.Figure(
+            data=go.Scatter(
+                x=months,
+                y=vals,
+                mode="lines+markers",
+                line=dict(color="#d7b34d"),
+                marker=dict(color="#d7b34d"),
+            )
+        )
+        fig.update_layout(
+            title="Portal density by month",
+            paper_bgcolor="#0c0c12",
+            plot_bgcolor="#0c0c12",
+            font_color="#e0e0e0",
+            margin=dict(l=30, r=10, t=40, b=40),
+            xaxis_title="Month",
+            yaxis_title="Portal count",
+        )
+        return fig
+
+    portal_trend_fig = build_portal_trend(portal_daily)
+
+    # Top portal days list
+    top_portal_days = "No portal days yet."
+    if portal_daily:
+        ranked = sorted(portal_daily.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        items = []
+        for d, cnt in ranked:
+            peak_val = portal_daily_peak.get(d, 0.0)
+            items.append(f"{d}: {cnt} portals; peak HCE {peak_val:.2f}")
+        top_portal_days = html.Ul([html.Li(t) for t in items], className="mb-0")
 
     selected_day = None
-    if click_data and click_data.get("points"):
-        idx = click_data["points"][0].get("x")
-        if idx is not None and idx < len(days_sorted):
-            selected_day = days_sorted[idx]
-    day_list = "Select a day to view sessions."
-    portal_count = 0
-    top_tracks_txt = "No tracks found."
+    if (cal_mode or "day") == "day" and click_data and click_data.get("points"):
+        pt = click_data["points"][0]
+        sel = pt.get("customdata") or pt.get("x")
+        if sel:
+            selected_day = str(sel)
+    day_list = "Select a day to view sessions (Day view)."
+    top_tracks_txt = "No tracks/bookmarks found."
     if selected_day:
         ts_a = dt.datetime.fromisoformat(selected_day).timestamp()
         ts_b = ts_a + 24 * 3600
         day_buckets = [b for b in filt if ts_a <= b.get("bucket_start_ts", 0) < ts_b]
-        sess_ids = {b.get("session_id") for b in day_buckets}
-        day_list = f"{selected_day}: {len(day_buckets)} buckets across {len(sess_ids)} sessions"
+        sess_ids = {b.get("session_id") for b in day_buckets if b.get("session_id")}
+        session_lines = []
+        for sid in sorted(sess_ids):
+            sb = [b for b in day_buckets if b.get("session_id") == sid]
+            dur = sum((b.get("bucket_end_ts", 0) - b.get("bucket_start_ts", 0)) for b in sb) / 60.0
+            mean_h = sum((b.get("mean_HCE") or 0) for b in sb) / max(len(sb), 1)
+            mean_q = sum((b.get("mean_Q") or 0) for b in sb) / max(len(sb), 1)
+            mean_x = sum((b.get("mean_X") or 0) for b in sb) / max(len(sb), 1)
+            session_lines.append(f"{sid}: {dur:.1f} min — HCE {mean_h:.2f}, Q {mean_q:.3f}, X {mean_x:.2f}")
+        if not session_lines:
+            session_lines.append("No sessions matched this day.")
+        day_list = html.Ul([html.Li(line) for line in session_lines], className="mb-2")
+
+        # Tracks and bookmarks overlapping the day window
+        track_items = []
+        bookmark_items = []
         try:
-            import pandas as pd
-            with sqlite3.connect(config.DB_PATH) as conn:
-                wf = pd.read_sql_query(
-                    "SELECT hce FROM track_waveform_points WHERE abs_ts BETWEEN ? AND ?",
-                    conn,
-                    params=(ts_a, ts_b),
-                )
-            portal_count = int((wf["hce"] > 1.0).sum()) if not wf.empty else 0
-        except Exception:
-            portal_count = 0
-        try:
-            import pandas as pd
             with sqlite3.connect(config.DB_PATH) as conn:
                 ts_df = pd.read_sql_query(
                     """
-                    SELECT title, artist, mean_HCE, start_ts FROM track_sessions
-                    WHERE start_ts BETWEEN ? AND ?
+                    SELECT title, artist, mean_HCE, start_ts, end_ts
+                    FROM track_sessions
+                    WHERE (start_ts BETWEEN ? AND ?) OR (end_ts BETWEEN ? AND ?)
                     ORDER BY mean_HCE DESC
-                    LIMIT 5
+                    LIMIT 10
                     """,
                     conn,
-                    params=(ts_a, ts_b),
+                    params=(ts_a, ts_b, ts_a, ts_b),
                 )
-            if not ts_df.empty:
-                top_tracks_txt = "; ".join(
-                    [f"{r['title']} — {r['artist']} (HCE {r['mean_HCE']:.2f})" for _, r in ts_df.iterrows()]
+            for _, r in ts_df.iterrows():
+                track_items.append(
+                    f"{r['title']} — {r['artist']} (HCE {r['mean_HCE']:.2f})"
                 )
         except Exception:
-            pass
+            track_items = []
+        try:
+            events = storage.get_events_between(ts_a, ts_b, session_id=None)
+            for e in events:
+                lbl = e.get("label") or "event"
+                tags = e.get("tags_json") or {}
+                bookmark_items.append(f"{lbl}: {tags.get('note') or tags.get('activity') or ''}".strip())
+        except Exception:
+            bookmark_items = []
+        tracks_block = html.Ul([html.Li(t) for t in track_items]) if track_items else "No tracks found."
+        bookmarks_block = (
+            html.Ul([html.Li(b) for b in bookmark_items]) if bookmark_items else "No bookmarks/events."
+        )
+        top_tracks_txt = html.Div(
+            [
+                html.Div("Tracks:", className="fw-semibold"),
+                tracks_block,
+                html.Div("Bookmarks/events:", className="fw-semibold mt-2"),
+                bookmarks_block,
+            ]
+        )
 
     stat_sessions = f"Sessions: {total_sessions}"
     stat_hours = f"Hours in state: {hours:.2f}h"
@@ -476,6 +682,8 @@ def describe_state(target, x_range, q_range, hce_range, dur_min, name, click_dat
         stat_portals,
         trend_fig,
         cal_fig,
+        portal_trend_fig,
+        top_portal_days,
         day_list,
         top_tracks_txt,
     )
@@ -487,32 +695,117 @@ def describe_state(target, x_range, q_range, hce_range, dur_min, name, click_dat
 )
 def suggest_recipe(target):
     now = time.time()
-    ts0 = now - 30 * 24 * 3600
+    ts0 = now - 120 * 24 * 3600
     ts1 = now
-    track_txt = "No track suggestion yet."
+
+    def match_bucket(b):
+        x = b.get("mean_X") or 0
+        qv = b.get("mean_Q") or 0
+        h = b.get("mean_HCE") or 0
+        std_q = b.get("std_Q") or 0
+        if target == "flow":
+            return 1.4 <= x <= 1.7 and 0.02 <= qv <= 0.04 and 0.4 <= h <= 1.0
+        if target == "relax":
+            return std_q < 0.1 and 1.6 <= x <= 1.8
+        if target == "transcend":
+            return h >= 1.0 and qv >= 0.04
+        return False
+
+    buckets = storage.get_buckets_between(ts0, ts1, session_id=None)
+    overall_mean = (
+        sum((b.get("mean_HCE") or 0) for b in buckets) / max(len(buckets), 1)
+        if buckets
+        else 0.4
+    ) or 0.4
+    matched = [b for b in buckets if match_bucket(b)]
+    track_stats: dict[str, dict] = {}
     try:
         with sqlite3.connect(config.DB_PATH) as conn:
             ts_df = pd.read_sql_query(
                 """
-                SELECT title, artist, mean_HCE FROM track_sessions
-                WHERE start_ts BETWEEN ? AND ?
-                ORDER BY mean_HCE DESC
-                LIMIT 1
+                SELECT track_id, title, artist, mean_HCE, start_ts, end_ts
+                FROM track_sessions
+                WHERE (start_ts BETWEEN ? AND ?) OR (end_ts BETWEEN ? AND ?)
                 """,
                 conn,
-                params=(ts0, ts1),
+                params=(ts0, ts1, ts0, ts1),
             )
-        if not ts_df.empty:
-            r = ts_df.iloc[0]
-            track_txt = f"Try: {r['title']} — {r['artist']} (HCE {r['mean_HCE']:.2f})"
+        for _, row in ts_df.iterrows():
+            tid = row["track_id"]
+            track_stats.setdefault(
+                tid,
+                {
+                    "track_id": tid,
+                    "title": row["title"],
+                    "artist": row["artist"],
+                    "count": 0,
+                    "mean_hce": 0.0,
+                    "best_hour": dt.datetime.utcfromtimestamp(row["start_ts"]).hour if row.get("start_ts") else 0,
+                },
+            )
     except Exception:
         pass
-    ctx = {
-        "flow": "Pair with focused tasks at your peak hour.",
-        "relax": "Use calming ambience + minimal social.",
-        "transcend": "Stack with reflection/journaling windows.",
-    }.get(target, "Tune context to your custom ranges.")
-    return f"{track_txt}. {ctx}"
+
+    for b in matched:
+        tid = b.get("track_id")
+        if not tid:
+            continue
+        st = track_stats.setdefault(
+            tid,
+            {
+                "track_id": tid,
+                "title": b.get("title") or "Unknown track",
+                "artist": b.get("artist") or "",
+                "count": 0,
+                "mean_hce": 0.0,
+                "best_hour": dt.datetime.utcfromtimestamp(b.get("bucket_start_ts", 0)).hour if b.get("bucket_start_ts") else 0,
+            },
+        )
+        st["count"] += 1
+        st["mean_hce"] += b.get("mean_HCE") or 0
+
+    for st in track_stats.values():
+        if st["count"] > 0:
+            st["mean_hce"] = st["mean_hce"] / st["count"]
+            st["lift"] = st["mean_hce"] / overall_mean if overall_mean else st["mean_hce"]
+        else:
+            st["lift"] = 0.0
+
+    ranked = sorted(track_stats.values(), key=lambda x: (x.get("lift", 0) * (1 + x.get("count", 0))), reverse=True)
+    ranked = [r for r in ranked if r.get("count", 0) > 0][:5]
+    if not ranked:
+        return "No auto-recipes yet — build history in this state."
+
+    cards = []
+    for i, r in enumerate(ranked):
+        name = f"{r['title']} — {r['artist']}".strip(" —")
+        lift = r.get("lift", 0)
+        comps = [
+            f"Expected lift: {lift:.1f}x",
+            f"Occurrences: {r.get('count', 0)}",
+            f"Timing: best around {r.get('best_hour', 0):02d}:00",
+        ]
+        cards.append(
+            dbc.Card(
+                dbc.CardBody(
+                    [
+                        html.Div(name, className="fw-semibold"),
+                        html.Div("; ".join(comps), className="small text-muted"),
+                        dcc.Store(id={"type": "manifest-recipe-store", "index": i}, data={**r, "name": name}),
+                        dbc.Button(
+                            "One-Click Apply",
+                            id={"type": "manifest-apply-recipe", "index": i},
+                            color="warning",
+                            size="sm",
+                            className="mt-1",
+                        ),
+                    ]
+                ),
+                style={"backgroundColor": "#0c0c12", "border": "1px solid #333"},
+                className="mb-2",
+            )
+        )
+    return cards
 
 
 @callback(
@@ -554,6 +847,50 @@ def save_or_apply_recipe(n_save, n_apply, target, name, notes, duration):
         )
         msg += "; applied to schedule in 1h"
     return msg
+
+
+@callback(
+    Output("manifest-recipe-status", "children", allow_duplicate=True),
+    Input({"type": "manifest-apply-recipe", "index": ALL}, "n_clicks"),
+    State({"type": "manifest-recipe-store", "index": ALL}, "data"),
+    State("manifest-target-state", "value"),
+    prevent_initial_call=True,
+)
+def apply_auto_recipe(n_clicks_list, data_list, target):
+    if not n_clicks_list or not any(n_clicks_list):
+        raise dash.exceptions.PreventUpdate
+    triggered = dash.callback_context.triggered_id
+    if not triggered or "index" not in triggered:
+        raise dash.exceptions.PreventUpdate
+    idx = triggered["index"]
+    data = None
+    for i, d in enumerate(data_list or []):
+        if i == idx:
+            data = d
+            break
+    if not data:
+        raise dash.exceptions.PreventUpdate
+    recipe_name = data.get("name") or "Auto recipe"
+    duration_min = 60
+    recipe_id = storage.upsert_recipe(
+        recipe_id=None,
+        name=recipe_name,
+        mode=target or "manifest",
+        target_json={"state": target, "track": data.get("track_id")},
+        steps_json=[f"Context: {recipe_name}; expected lift {data.get('lift', 0):.1f}x"],
+        description="Auto-generated from proven patterns",
+    )
+    start_ts = time.time() + 900
+    end_ts = start_ts + duration_min * 60
+    storage.add_schedule_block(
+        title=recipe_name,
+        block_type=target or "manifest",
+        duration_min=duration_min,
+        flexible=False,
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+    return f"Applied auto-recipe #{recipe_id} for {recipe_name} (starts in 15m)"
 
 
 @callback(
@@ -686,6 +1023,16 @@ def pattern_sunburst(target):
         values=values,
         title="Induction pattern sunburst",
     )
+    hover_texts = []
+    for lbl, parent, val in zip(labels, parents, values):
+        if parent == "state":
+            hover_texts.append(f"{lbl} — {val} occurrences")
+        else:
+            hover_texts.append(f"{parent} • {lbl} — {val} occurrences")
+    sunburst_fig.update_traces(
+        hovertemplate="%{customdata}<extra></extra>",
+        customdata=hover_texts,
+    )
 
     proven_txt = "\n".join(proven_lines) if proven_lines else "No proven inducers yet."
     emerging_txt = "\n".join(emerging_lines) if emerging_lines else "No emerging patterns yet."
@@ -694,6 +1041,7 @@ def pattern_sunburst(target):
 
 @callback(
     Output("manifest-oracle-response", "children"),
+    Output("manifest-oracle-input", "value", allow_duplicate=True),
     Input("manifest-oracle-send", "n_clicks"),
     State("manifest-oracle-input", "value"),
     State("manifest-target-state", "value"),
@@ -712,7 +1060,8 @@ def oracle_mini_chat(n, user_text, target, stat_sessions, stat_hours, stat_porta
         f"Proven inducers: {proven or ''}",
     ]
     # Placeholder for real Oracle integration
-    return "Oracle (stub): " + user_text + "\n" + "\n".join(ctx_lines)
+    prefilling = "\n".join(ctx_lines)
+    return "Oracle (stub): " + user_text + "\n" + prefilling, prefilling
 
 
 @callback(

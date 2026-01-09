@@ -186,6 +186,11 @@ class StateEngine:
                         self._reliability_pct = self._compute_reliability_pct()
                     if self._emit_ndjson:
                         self._append_ndjson(snapshot)
+                    try:
+                        self._append_live_waveform(snapshot, now)
+                        self._append_state_summary(snapshot, now)
+                    except Exception:
+                        pass
             if now >= self._next_bucket_ts:
                 self._next_bucket_ts = now + 60.0
                 self._maybe_bucket(now)
@@ -250,6 +255,67 @@ class StateEngine:
         except Exception:
             # Swallow errors; leave to future instrumentation.
             pass
+
+    def _append_live_waveform(self, snapshot: Dict[str, object], now_s: float) -> None:
+        try:
+            from alma.engine import storage
+        except Exception:
+            return
+        try:
+            latest_sp = storage.get_latest_spotify(session_id=None)
+        except Exception:
+            latest_sp = None
+        if not latest_sp or not latest_sp.get("is_playing") or not latest_sp.get("track_id"):
+            return
+        track_id = latest_sp.get("track_id")
+        title = latest_sp.get("track_name") or ""
+        artist = latest_sp.get("artists") or ""
+        progress_ms = latest_sp.get("progress_ms") or 0
+        rel_sec = float(progress_ms) / 1000.0
+        session_id = self.get_session_id()
+        q_raw = snapshot.get("Q_abs_raw")
+        raw_block = snapshot.get("raw") or {}
+        hce_raw = raw_block.get("HCE_raw") if isinstance(raw_block, dict) else snapshot.get("HCE_raw")
+        if hce_raw is None:
+            hce_raw = snapshot.get("HCE")
+        x_raw = snapshot.get("X")
+        storage.insert_live_waveform_point(
+            track_id=track_id,
+            session_id=session_id,
+            title=title,
+            artist=artist,
+            abs_ts=now_s,
+            rel_sec=rel_sec,
+            q_raw=q_raw,
+            hce_raw=hce_raw,
+            x_raw=x_raw,
+        )
+
+    def _append_state_summary(self, snapshot: Dict[str, object], now_s: float) -> None:
+        try:
+            from alma.engine import storage
+        except Exception:
+            return
+        session_id = self.get_session_id()
+        rel_sec = snapshot.get("t_session")
+        x = snapshot.get("X")
+        q = snapshot.get("Q_abs_raw") or snapshot.get("Q_vibe_focus_raw") or snapshot.get("Q_vibe_raw") or snapshot.get("Q_raw")
+        raw_block = snapshot.get("raw") or {}
+        hce = raw_block.get("HCE_raw") if isinstance(raw_block, dict) else snapshot.get("HCE_raw")
+        if hce is None:
+            hce = snapshot.get("HCE")
+        is_peak = bool(hce and hce > 1.0)
+        storage.insert_state_summary(
+            session_id=session_id,
+            ts=now_s,
+            rel_sec=rel_sec if rel_sec is not None else 0.0,
+            x=x,
+            q=q,
+            hce=hce,
+            is_peak=is_peak,
+            peak_kind="hce>1.0" if is_peak else "",
+            source="state_stream",
+        )
 
     def _append_history(self, snapshot: Dict[str, object]) -> None:
         """Append snapshot fields to rolling history for UI."""

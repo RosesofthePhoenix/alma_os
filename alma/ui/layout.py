@@ -373,6 +373,50 @@ def build_layout() -> dbc.Container:
             dbc.Card(
                 dbc.CardBody(
                     [
+                        html.Div("Live substance context", className="fw-semibold text-warning mb-1"),
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    [
+                                        dbc.Checklist(
+                                            options=[{"label": "Log substance context", "value": "on"}],
+                                            value=["on"],
+                                            id="live-substance-enable",
+                                            switch=True,
+                                        ),
+                                        html.Div("Cocaine highness", className="small"),
+                                        dcc.Slider(id="live-cocaine", min=0, max=10, step=1, value=0, marks=None),
+                                    ],
+                                    md=4,
+                                ),
+                                dbc.Col(
+                                    [
+                                        html.Div("Ketamine highness", className="small"),
+                                        dcc.Slider(id="live-ketamine", min=0, max=10, step=1, value=0, marks=None),
+                                        html.Div("Tusi highness", className="small mt-2"),
+                                        dcc.Slider(id="live-tusi", min=0, max=10, step=1, value=0, marks=None),
+                                        dbc.Input(
+                                            id="live-tusi-source",
+                                            placeholder="Tusi source (optional)",
+                                            type="text",
+                                            size="sm",
+                                            className="mt-1",
+                                        ),
+                                    ],
+                                    md=8,
+                                ),
+                            ],
+                            className="gy-2",
+                        ),
+                        html.Div(id="live-substance-status", className="small text-success mt-1"),
+                    ]
+                ),
+                className="mb-3",
+                style={"backgroundColor": "#111118", "border": "1px solid #333"},
+            ),
+            dbc.Card(
+                dbc.CardBody(
+                    [
                         dbc.Row(
                             [
                                 dbc.Col(
@@ -529,6 +573,41 @@ def _poll_live_metrics(_n):
     HCE = snap.get("HCE") or 0.0
     text = f"Live: X={X:.3f} | Q={Q:.3f} | HCE={HCE:.3f}"
     return {"X": X, "Q": Q, "HCE": HCE, "ts": snap.get("ts_unix")}, text
+
+
+@callback(
+    Output("live-substance-status", "children"),
+    Input("live-substance-enable", "value"),
+    Input("live-cocaine", "value"),
+    Input("live-ketamine", "value"),
+    Input("live-tusi", "value"),
+    Input("live-tusi-source", "value"),
+)
+def _log_live_substance(enable, coc, ket, tusi, tusi_src):
+    if "on" not in (enable or []):
+        return "Logging off"
+    session_id = registry.state_engine.get_session_id() or ""
+    ts = time.time()
+    tags = {
+        "page": "live_substance_bar",
+        "cocaine_highness": coc or 0,
+        "ketamine_highness": ket or 0,
+        "tusi_highness": tusi or 0,
+        "tusi_source": tusi_src or "",
+    }
+    try:
+        storage.insert_event(
+            ts=ts,
+            session_id=session_id,
+            kind="live_substance",
+            label="Live substance context",
+            note=tusi_src or "",
+            tags_json=tags,
+            context_json={"saved_ts": ts},
+        )
+    except Exception:
+        return "Log failed"
+    return f"Logged: C{tags['cocaine_highness']} K{tags['ketamine_highness']} T{tags['tusi_highness']}"
 
 
 @callback(
@@ -949,6 +1028,27 @@ def _oracle_context():
                 ctx["top_track"] = f"{row.get('title','?')} — {row.get('artist','?')} (HCE {row.get('mean_HCE',0):.2f})"
     except Exception:
         pass
+    # State summary window (last 30 minutes)
+    try:
+        now = time.time()
+        summary_rows = storage.list_state_summary(now - 1800, now, limit=5000)
+        if summary_rows:
+            df = pd.DataFrame(summary_rows)
+            ctx["state_summary"] = {
+                "peak_hce": float(df["hce"].max(skipna=True)) if "hce" in df else None,
+                "peak_x": float(df["x"].max(skipna=True)) if "x" in df else None,
+                "peak_q": float(df["q"].max(skipna=True)) if "q" in df else None,
+            }
+    except Exception:
+        pass
+    # Event intervals (recent)
+    try:
+        now = time.time()
+        intervals = storage.list_event_intervals(now - 86400, now, limit=500)
+        if intervals:
+            ctx["event_intervals"] = intervals
+    except Exception:
+        pass
     try:
         latest_track = storage.get_latest_spotify(session_id=None)
         if latest_track and latest_track.get("track_name"):
@@ -1071,6 +1171,29 @@ def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
         )
 
     gold_layers = _gold_context_layers(user_text)
+
+    # Enrich prompt with state summary and intervals
+    summary_txt = ""
+    summary = ctx.get("state_summary") or {}
+    if summary:
+        summary_txt = (
+            f"State peaks (last 30m): HCE {summary.get('peak_hce')}, "
+            f"X {summary.get('peak_x')}, Q {summary.get('peak_q')}."
+        )
+    intervals_txt = ""
+    ev_ints = ctx.get("event_intervals") or []
+    if ev_ints:
+        intervals_txt = "\nRecent event intervals (aligned to metrics):\n"
+        for ev in ev_ints[:5]:
+            intervals_txt += (
+                f"- {time.strftime('%Y-%m-%d %H:%M', time.localtime(ev.get('start_ts',0)))} "
+                f"dur {ev.get('duration',0):.1f}s "
+                f"HCE mean/peak {ev.get('mean_hce')}/{ev.get('peak_hce')} "
+                f"Q mean/peak {ev.get('mean_q')}/{ev.get('peak_q')} "
+                f"X mean/peak {ev.get('mean_x')}/{ev.get('peak_x')}\n"
+            )
+    if summary_txt or intervals_txt:
+        gold_layers += f"\n\nState summary:\n{summary_txt}\n{intervals_txt}"
 
     base_prompt = (
         f"{ORACLE_SYSTEM_PREFIX}\n\n"
@@ -1228,6 +1351,12 @@ def save_global_log(n_clicks, social, ambience, activity, minutes, mood, sub_tog
             }
         )
     status = registry.state_engine.get_status() or {}
+    hce_now = 0.0
+    try:
+        snap = status.get("latest_snapshot") or {}
+        hce_now = float(snap.get("HCE") or 0.0)
+    except Exception:
+        hce_now = 0.0
     ctx_json = {"saved_ts": now, "snapshot": status}
     storage.insert_event(
         ts=now,
@@ -1242,7 +1371,7 @@ def save_global_log(n_clicks, social, ambience, activity, minutes, mood, sub_tog
     return (
         "Saved.",
         True,
-        "",
+        f"Context captured — HCE {hce_now:.2f}",
         "",
         "",
         "",

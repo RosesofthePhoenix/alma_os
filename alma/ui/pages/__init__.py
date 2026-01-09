@@ -14,6 +14,8 @@ from . import (
     longitudinal,
     media_alchemy,
     manifest,
+    live_media,
+    spotify_insights,
 )
 
 
@@ -25,6 +27,8 @@ PAGES = [
     {"name": "Memory", "path": "/memory", "layout": memory.layout},
     {"name": "Spotify Resonance", "path": "/spotify", "layout": spotify_resonance.layout},
     {"name": "Media Alchemy", "path": "/media_alchemy", "layout": media_alchemy.layout},
+    {"name": "Live Media", "path": "/live_media", "layout": live_media.layout},
+    {"name": "Spotify Insights", "path": "/spotify_insights", "layout": spotify_insights.layout},
     {"name": "Longitudinal Insights", "path": "/insights", "layout": longitudinal.layout},
     {"name": "Environment", "path": "/environment", "layout": environment.layout},
     {"name": "Recipes", "path": "/recipes", "layout": recipes.layout},

@@ -88,6 +88,28 @@ def _search_tracks(query: str, limit: int = 50) -> List[Dict[str, str]]:
         return []
 
 
+def _render_waveform_placeholder(title: str = "Per-second waveform") -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 1],
+            y=[0, 0],
+            mode="lines",
+            line=dict(color="rgba(200,200,200,0.1)", dash="dot"),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    fig.update_layout(
+        template="plotly_dark",
+        title=title,
+        xaxis_title="Seconds (relative)",
+        yaxis_title="Value",
+        height=320,
+    )
+    return fig
+
+
 def _fetch_track_sections(track_id: str) -> pd.DataFrame:
     try:
         rows = storage.list_track_sections(track_id, limit_sessions=1)
@@ -329,6 +351,25 @@ layout = dbc.Container(
                                     dcc.Dropdown(id="li-track-select", placeholder="Select a track for section analysis"),
                                     dbc.Input(id="li-search-text", placeholder="Search all tracks (title/artist)", className="mb-2", debounce=True),
                                     dcc.Dropdown(id="li-search-results", placeholder="Search results", className="mb-3"),
+                                    dbc.Checklist(
+                                        id="li-waveform-toggle",
+                                        options=[{"label": "Show per-second waveform", "value": "show"}],
+                                        value=[],
+                                        switch=True,
+                                        className="mb-2",
+                                    ),
+                                    dbc.Checklist(
+                                        id="li-waveform-metrics",
+                                        options=[
+                                            {"label": "HCE", "value": "hce"},
+                                            {"label": "Q", "value": "q"},
+                                            {"label": "X", "value": "x"},
+                                        ],
+                                        value=["hce"],
+                                        inline=True,
+                                        className="mb-2 text-muted small",
+                                    ),
+                                    dcc.Graph(id="li-track-waveform", className="mb-3"),
                                     dcc.Graph(id="li-track-sections"),
                                     html.Div(id="li-track-table", className="mt-2"),
                                 ]
@@ -686,4 +727,73 @@ def render_track_sections(track_id):
         className="mt-2",
     )
     return fig, table
+
+
+@callback(
+    Output("li-track-waveform", "figure"),
+    Input("li-track-select", "value"),
+    Input("li-waveform-toggle", "value"),
+    Input("li-waveform-metrics", "value"),
+    prevent_initial_call=False,
+)
+def render_li_waveform(track_id, toggle, metrics):
+    if not track_id or not toggle or "show" not in (toggle or []):
+        return _render_waveform_placeholder("Per-second waveform (toggle to view)")
+    try:
+        points = storage.list_track_waveform_points(track_id, limit_sessions=3, limit_points=8000)
+    except Exception:
+        points = []
+    if not points:
+        return _render_waveform_placeholder("No per-second waveform yet")
+    df = pd.DataFrame(points)
+    df = df.sort_values(["abs_ts", "rel_sec"])
+    session_order = []
+    for _, r in df.iterrows():
+        sid = r.get("session_id") or "session"
+        if sid not in session_order:
+            session_order.append(sid)
+    colors = {"hce": "#d7b34d", "q": "#5fb3ff", "x": "#ff6b6b"}
+    fig = go.Figure()
+    for sid in session_order:
+        sdf = df[df["session_id"] == sid] if sid != "session" else df[df["session_id"].isna() | (df["session_id"] == "")]
+        sdf = sdf.sort_values("rel_sec")
+        label_prefix = sid if sid else "latest"
+        if "hce" in (metrics or []):
+            fig.add_trace(
+                go.Scatter(
+                    x=sdf["rel_sec"],
+                    y=sdf["hce"],
+                    mode="lines",
+                    line=dict(color=colors["hce"], width=3),
+                    name=f"HCE ({label_prefix})",
+                )
+            )
+        if "q" in (metrics or []):
+            fig.add_trace(
+                go.Scatter(
+                    x=sdf["rel_sec"],
+                    y=sdf["q"],
+                    mode="lines",
+                    line=dict(color=colors["q"], width=2, dash="dot"),
+                    name=f"Q ({label_prefix})",
+                )
+            )
+        if "x" in (metrics or []):
+            fig.add_trace(
+                go.Scatter(
+                    x=sdf["rel_sec"],
+                    y=sdf["x"],
+                    mode="lines",
+                    line=dict(color=colors["x"], width=2, dash="dash"),
+                    name=f"X ({label_prefix})",
+                )
+            )
+    fig.update_layout(
+        template="plotly_dark",
+        title="Per-second waveform (dense HCE/Q/X)",
+        xaxis_title="Seconds (relative)",
+        yaxis_title="Value",
+        height=360,
+    )
+    return fig
 
