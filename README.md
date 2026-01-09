@@ -22,7 +22,7 @@ If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
 - Baseline robustness: loads `baselines/baseline_global_muse_v1_revised.json` with fallbacks; status logged on engine init.
 - Persistence (SQLite `data/alma.db`):
   - Samples → buckets (mean_X/mean_Q/mean_HCE/std_Q/Q_slope/valid_fraction) on ~15s cadence; per-track per-second waveforms stored on finalize for layered historical overlays
-  - Live raw logger: per-compute raw `Q_abs_raw`, `HCE_raw`, `X` written to `live_waveform_points`; per-second summary to `state_summary` with peak flags; `event_intervals` schema ready for event-aligned metrics
+  - Live raw logger: per-compute raw `Q_abs_raw`, `HCE_raw`, `X` written to `live_waveform_points`; per-second summary to `state_summary` with peak flags; `event_intervals` auto-backfilled from historical events (aligned buckets) and used for event-aware summaries
   - Events/bookmarks (with snapshot_json, context, quick captures)
   - Recipes (description, targets, steps, efficacy_score)
   - Schedule blocks
@@ -42,7 +42,7 @@ If 8050 is busy, stop other processes or set `PORT=8051 python app.py`.
   - Live Media: pure real-time raw traces (Q_abs_raw, HCE_raw, X) from `live_waveform_points` only; dashed segments mark carry-forward fills; no legacy/bucket data.
   - Spotify Insights: pure dense historical view from `live_waveform_points` only; stacked Track A/B raw graphs with HCE/Q/X toggles; full-width inducing/top-metric tables (avg/peak X/Q/HCE).
 - Oracle (Phase 7, v0.7.7): fixed-right overlay using local Ollama (`huihui_ai/dolphin3-abliterated`) with 90s timeout + retries; neutral, analytical system prompt with canonical master doc; mic (browser SpeechRecognition) and TTS (SpeechSynthesis) toggles; gold-tier context injected into every mode (top events/bookmarks/captured moments, readiness aggregates, upcoming/completed schedule blocks, longitudinal top tracks), all date-aware for historical queries; patterns (social/activity/mood/media, intention payoff), lite forecast (p90 transcendence/strain/media), section summaries (best/top sections) fed into responses.
-  - Oracle enrichment: now also ingests `state_summary` peaks (recent per-second X/Q/HCE) and recent `event_intervals` for event-aligned metrics across all modes.
+  - Oracle enrichment: now also ingests `state_summary` peaks (recent per-second X/Q/HCE) and recent `event_intervals` (auto-backfilled from historical events) for event-aligned metrics across all modes.
 - Turrell Room:
   - Runner launches `external/xq_turrell_room_2d_v6_hce.py` (HCE-enhanced); HUD/text fallback (SysFont→freetype→pixel), hotkeys logged (H, 0–3, F, ESC double-press), display retry, NDJSON follower tolerant to truncation; display selection (Primary/External) persisted.
   - v5_3 style script kept for reference; v6 is the active target.
