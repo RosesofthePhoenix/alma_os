@@ -1103,6 +1103,18 @@ def _oracle_context():
         cont_entries = storage.list_time_entries_between(window, now, limit=500)
         notes = storage.list_continuum_notes(limit=300)
         journals = storage.list_journal_entries(window, now, limit=300)
+        with sqlite3.connect(config.DB_PATH) as conn:
+            qc_df = pd.read_sql_query(
+                """
+                SELECT ts, note, tags_json, context_json
+                FROM events
+                WHERE kind = 'quick_capture' AND ts BETWEEN ? AND ?
+                ORDER BY ts DESC
+                LIMIT 200
+                """,
+                conn,
+                params=(window, now),
+            )
         cont_lines = []
         for e in cont_entries:
             st = e.get("start_time")
@@ -1129,10 +1141,30 @@ def _oracle_context():
                 f"HCE_mean={j.get('mean_hce')} peak={j.get('peak_hce')} X_mean={j.get('mean_x')} Q_mean={j.get('mean_q')} "
                 f"text={j.get('text','')[:120]}"
             )
+        if 'qc_df' in locals() and not qc_df.empty:
+            for _, r in qc_df.iterrows():
+                ts = r.get("ts") or 0
+                tags = {}
+                ctx_json = {}
+                try:
+                    tags = json.loads(r.get("tags_json") or "{}")
+                except Exception:
+                    tags = {}
+                try:
+                    ctx_json = json.loads(r.get("context_json") or "{}")
+                except Exception:
+                    ctx_json = {}
+                cont_lines.append(
+                    f"[QuickCapture] {time.strftime('%Y-%m-%d %H:%M', time.localtime(ts))} mood={tags.get('mood')} "
+                    f"activity={tags.get('activity')} social={tags.get('social')} "
+                    f"HCE={ctx_json.get('mean_HCE')} Q={ctx_json.get('mean_Q')} X={ctx_json.get('mean_X')} "
+                    f"track={ctx_json.get('track','')} note={r.get('note','')[:120]}"
+                )
         ctx["continuum"] = {
             "time_entries": cont_entries,
             "notes": notes,
             "journals": journals,
+            "quick_captures": qc_df.to_dict(orient="records") if 'qc_df' in locals() else [],
             "summary": "\n".join(cont_lines[:50]),
         }
     except Exception:
