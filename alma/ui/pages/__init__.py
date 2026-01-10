@@ -16,6 +16,7 @@ from . import (
     manifest,
     live_media,
     spotify_insights,
+    continuum,
 )
 
 
@@ -29,6 +30,7 @@ PAGES = [
     {"name": "Media Alchemy", "path": "/media_alchemy", "layout": media_alchemy.layout},
     {"name": "Live Media", "path": "/live_media", "layout": live_media.layout},
     {"name": "Spotify Insights", "path": "/spotify_insights", "layout": spotify_insights.layout},
+    {"name": "Continuum Tracker", "path": "/continuum", "layout": continuum.layout},
     {"name": "Longitudinal Insights", "path": "/insights", "layout": longitudinal.layout},
     {"name": "Environment", "path": "/environment", "layout": environment.layout},
     {"name": "Recipes", "path": "/recipes", "layout": recipes.layout},

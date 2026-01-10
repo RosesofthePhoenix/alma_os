@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.1 — Continuum Tracker upgrades (notes/journal/EEG + mini-Oracle)
+- Continuum Timeline/Calendar now shows time entries, notes, and journal entries (notes/journals mapped by their timestamps so they appear in agenda).
+- LLM prompts (Analyze Patterns + Reflect/Synthesize) enriched with recent notes/journal text (including mood) and EEG summaries for the same windows; prompts clarify HCE is an EEG-derived metric (not hours).
+- Calendar/timeline spacing polish; pattern text refreshed from current data.
+- EEG summaries for notes/journal/quick-capture windows recorded without validity gating (always captured).
+
 ## v0.8 — Real-time raw resonance + Spotify Insights + Oracle summaries
 - Live raw logger: every state compute now writes raw `Q_abs_raw`, `HCE_raw` (or `HCE` fallback), and `X` to a new `live_waveform_points` table (per-track, per-session, per-second) and to a new `state_summary` table (per-second X/Q/HCE with peak flags). Added `event_intervals` table for aligned event windows (schema ready; ingestion next).
 - Live Media: pure real-time traces only (no smoothing/legacy/buckets); uses `live_waveform_points` exclusively. Toggles relabeled to `Q_abs_raw`, `HCE_raw`, `X`; dashed segments show carry-forward gaps; solid lines show real samples; neon palette retained.

@@ -242,6 +242,125 @@ def init_db() -> None:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS time_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                start_time REAL,
+                end_time REAL,
+                duration REAL,
+                category TEXT,
+                tags_json TEXT,
+                description TEXT,
+                hce_mean REAL,
+                hce_peak REAL,
+                mean_x REAL,
+                peak_x REAL,
+                peak_q REAL,
+                q_mean REAL,
+                reliability_mean REAL,
+                spotify_track_uri TEXT,
+                spotify_title TEXT,
+                spotify_artist TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS journal_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL,
+                start_ts REAL,
+                end_ts REAL,
+                text TEXT,
+                mood INTEGER,
+                energy INTEGER,
+                tags_json TEXT,
+                mean_x REAL,
+                mean_q REAL,
+                mean_hce REAL,
+                peak_x REAL,
+                peak_q REAL,
+                peak_hce REAL,
+                source TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS continuum_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL,
+                content_md TEXT,
+                pos_x REAL,
+                pos_y REAL,
+                color TEXT,
+                links_json TEXT,
+                eeg_snapshot_json TEXT,
+                mood INTEGER,
+                category TEXT,
+                spotify_title TEXT,
+                spotify_artist TEXT,
+                tags_json TEXT,
+                start_ts REAL,
+                end_ts REAL,
+                mean_x REAL,
+                mean_q REAL,
+                mean_hce REAL,
+                peak_x REAL,
+                peak_q REAL,
+                peak_hce REAL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ambient_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL,
+                app_name TEXT,
+                window_title TEXT,
+                duration REAL,
+                idle_flag INTEGER DEFAULT 0
+            )
+            """
+        )
+        # ensure newly added columns exist for upgraded installs
+        def _ensure_column(table: str, col: str, col_type: str) -> None:
+            try:
+                info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+                names = {r[1] for r in info}
+                if col not in names:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+            except Exception:
+                pass
+
+        migrations = {
+            "time_entries": [("mean_x", "REAL"), ("peak_x", "REAL"), ("peak_q", "REAL")],
+            "journal_entries": [
+                ("start_ts", "REAL"),
+                ("end_ts", "REAL"),
+                ("mean_x", "REAL"),
+                ("mean_q", "REAL"),
+                ("mean_hce", "REAL"),
+                ("peak_x", "REAL"),
+                ("peak_q", "REAL"),
+                ("peak_hce", "REAL"),
+            ],
+            "continuum_notes": [
+                ("start_ts", "REAL"),
+                ("end_ts", "REAL"),
+                ("mean_x", "REAL"),
+                ("mean_q", "REAL"),
+                ("mean_hce", "REAL"),
+                ("peak_x", "REAL"),
+                ("peak_q", "REAL"),
+                ("peak_hce", "REAL"),
+            ],
+        }
+        for table, cols in migrations.items():
+            for col, ctype in cols:
+                _ensure_column(table, col, ctype)
         try:
             cur.execute("ALTER TABLE track_sections ADD COLUMN source TEXT")
         except Exception:
@@ -941,6 +1060,213 @@ def list_event_intervals(ts0: float, ts1: float, limit: int = 5000) -> List[Dict
             (ts0, ts1, limit),
         )
         return _rows_to_dicts(cur)
+
+
+def insert_time_entry(
+    start_time: float,
+    end_time: float,
+    duration: float,
+    category: str,
+    tags_json: str,
+    description: str,
+    hce_mean: Optional[float],
+    hce_peak: Optional[float],
+    mean_x: Optional[float],
+    peak_x: Optional[float],
+    peak_q: Optional[float],
+    q_mean: Optional[float],
+    reliability_mean: Optional[float],
+    spotify_track_uri: Optional[str],
+    spotify_title: Optional[str],
+    spotify_artist: Optional[str],
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO time_entries (
+                start_time, end_time, duration, category, tags_json, description,
+                hce_mean, hce_peak, mean_x, peak_x, peak_q, q_mean, reliability_mean,
+                spotify_track_uri, spotify_title, spotify_artist
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                start_time,
+                end_time,
+                duration,
+                category or "",
+                tags_json or "",
+                description or "",
+                hce_mean,
+                hce_peak,
+                mean_x,
+                peak_x,
+                peak_q,
+                q_mean,
+                reliability_mean,
+                spotify_track_uri or "",
+                spotify_title or "",
+                spotify_artist or "",
+            ),
+        )
+        conn.commit()
+
+
+def list_today_time_entries(now_ts: Optional[float] = None) -> List[Dict[str, object]]:
+    if now_ts is None:
+        now_ts = time.time()
+    start_of_day = now_ts - (now_ts % 86400)
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM time_entries
+            WHERE start_time >= ?
+            ORDER BY start_time DESC
+            """,
+            (start_of_day,),
+        )
+        return _rows_to_dicts(cur)
+
+
+def list_time_entries_between(ts0: float, ts1: float, limit: int = 1000) -> List[Dict[str, object]]:
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM time_entries
+            WHERE start_time BETWEEN ? AND ?
+            ORDER BY start_time ASC
+            LIMIT ?
+            """,
+            (ts0, ts1, limit),
+        )
+        return _rows_to_dicts(cur)
+
+
+def insert_journal_entry(
+    ts: float,
+    text: str,
+    mood: Optional[int],
+    energy: Optional[int],
+    tags_json: str,
+    source: str = "",
+    start_ts: Optional[float] = None,
+    end_ts: Optional[float] = None,
+    mean_x: Optional[float] = None,
+    mean_q: Optional[float] = None,
+    mean_hce: Optional[float] = None,
+    peak_x: Optional[float] = None,
+    peak_q: Optional[float] = None,
+    peak_hce: Optional[float] = None,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO journal_entries (ts, start_ts, end_ts, text, mood, energy, tags_json, mean_x, mean_q, mean_hce, peak_x, peak_q, peak_hce, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (ts, start_ts, end_ts, text or "", mood, energy, tags_json or "", mean_x, mean_q, mean_hce, peak_x, peak_q, peak_hce, source or ""),
+        )
+        conn.commit()
+
+
+def list_journal_entries(ts0: float, ts1: float, limit: int = 500) -> List[Dict[str, object]]:
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM journal_entries
+            WHERE ts BETWEEN ? AND ?
+            ORDER BY ts DESC
+            LIMIT ?
+            """,
+            (ts0, ts1, limit),
+        )
+        return _rows_to_dicts(cur)
+
+
+def insert_continuum_note(
+    ts: float,
+    content_md: str,
+    pos_x: float,
+    pos_y: float,
+    color: str,
+    links_json: str,
+    eeg_snapshot_json: str,
+    mood: Optional[int],
+    category: str,
+    spotify_title: str,
+    spotify_artist: str,
+    tags_json: str,
+    start_ts: Optional[float],
+    end_ts: Optional[float],
+    mean_x: Optional[float],
+    mean_q: Optional[float],
+    mean_hce: Optional[float],
+    peak_x: Optional[float],
+    peak_q: Optional[float],
+    peak_hce: Optional[float],
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO continuum_notes (
+                ts, content_md, pos_x, pos_y, color, links_json, eeg_snapshot_json, mood, category, spotify_title, spotify_artist, tags_json,
+                start_ts, end_ts, mean_x, mean_q, mean_hce, peak_x, peak_q, peak_hce
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ts,
+                content_md or "",
+                pos_x,
+                pos_y,
+                color or "",
+                links_json or "[]",
+                eeg_snapshot_json or "{}",
+                mood,
+                category or "",
+                spotify_title or "",
+                spotify_artist or "",
+                tags_json or "[]",
+                start_ts,
+                end_ts,
+                mean_x,
+                mean_q,
+                mean_hce,
+                peak_x,
+                peak_q,
+                peak_hce,
+            ),
+        )
+        conn.commit()
+
+
+def list_continuum_notes(limit: int = 200) -> List[Dict[str, object]]:
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM continuum_notes
+            ORDER BY ts DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return _rows_to_dicts(cur)
+
+
+def insert_ambient_log(ts: float, app_name: str, window_title: str, duration: float, idle_flag: bool) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO ambient_log (ts, app_name, window_title, duration, idle_flag)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (ts, app_name or "", window_title or "", duration, int(bool(idle_flag))),
+        )
+        conn.commit()
 
 
 def backfill_event_intervals(max_events: int = 200, window_s: float = 300.0) -> None:
