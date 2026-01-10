@@ -1095,6 +1095,48 @@ def _oracle_context():
                 ]
     except Exception:
         pass
+
+    # Continuum (time entries, notes, journals) with EEG/Spotify linkage
+    try:
+        now = time.time()
+        window = now - 7 * 86400
+        cont_entries = storage.list_time_entries_between(window, now, limit=500)
+        notes = storage.list_continuum_notes(limit=300)
+        journals = storage.list_journal_entries(window, now, limit=300)
+        cont_lines = []
+        for e in cont_entries:
+            st = e.get("start_time")
+            et = e.get("end_time") or st
+            dur_h = ((et or st or 0) - (st or 0)) / 3600.0 if st else 0
+            cont_lines.append(
+                f"[Time] {time.strftime('%Y-%m-%d %H:%M', time.localtime(st or 0))} cat={e.get('category','?')} "
+                f"dur_h={dur_h:.2f} HCE_mean={e.get('hce_mean')} peak={e.get('hce_peak')} "
+                f"X_mean={e.get('mean_x')} Q_mean={e.get('q_mean')} spotify={e.get('spotify_title','')}"
+            )
+        for n in notes:
+            ts = n.get("ts") or 0
+            if ts < window or ts > now:
+                continue
+            cont_lines.append(
+                f"[Note] {time.strftime('%Y-%m-%d %H:%M', time.localtime(ts))} mood={n.get('mood')} "
+                f"HCE_mean={n.get('mean_hce')} peak={n.get('peak_hce')} X_mean={n.get('mean_x')} Q_mean={n.get('mean_q')} "
+                f"text={n.get('content_md','')[:120]}"
+            )
+        for j in journals:
+            ts = j.get("ts") or 0
+            cont_lines.append(
+                f"[Journal] {time.strftime('%Y-%m-%d %H:%M', time.localtime(ts))} mood={j.get('mood')} "
+                f"HCE_mean={j.get('mean_hce')} peak={j.get('peak_hce')} X_mean={j.get('mean_x')} Q_mean={j.get('mean_q')} "
+                f"text={j.get('text','')[:120]}"
+            )
+        ctx["continuum"] = {
+            "time_entries": cont_entries,
+            "notes": notes,
+            "journals": journals,
+            "summary": "\n".join(cont_lines[:50]),
+        }
+    except Exception:
+        pass
     return ctx
 
 
@@ -1196,12 +1238,15 @@ def _oracle_prompt(mode: str, user_text: str, ctx: Dict[str, object]) -> str:
     if summary_txt or intervals_txt:
         gold_layers += f"\n\nState summary:\n{summary_txt}\n{intervals_txt}"
 
+    cont_summary = ctx.get("continuum", {}).get("summary") if ctx else ""
+
     base_prompt = (
         f"{ORACLE_SYSTEM_PREFIX}\n\n"
         f"Mode: {mode}\n"
         f"Current context: {metrics}\n\n"
         f"Patterns:\n{patterns_txt}\n\n"
         f"Sections:\n{sections_txt}\n\n"
+        f"Continuum:\n{cont_summary}\n\n"
         f"Forecast:\n{forecast_txt}\n\n"
         f"{gold_layers}\n\n"
         f"User query: {user_text}\n"
